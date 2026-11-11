@@ -55,6 +55,8 @@ try {
         "@thruputchain/protocol": pkg.devDependencies["@thruputchain/protocol"],
         "@thruputchain/contract-spec":
           pkg.devDependencies["@thruputchain/contract-spec"],
+        "@types/node": pkg.devDependencies["@types/node"],
+        tsx: pkg.devDependencies.tsx,
       },
     }),
   );
@@ -66,6 +68,7 @@ try {
     "--registry=https://registry.npmjs.org",
   ]);
   await cp(join(root, "tests"), work, { recursive: true });
+  await cp(join(root, "examples"), join(work, "examples"), { recursive: true });
   await writeFile(
     join(work, "tsconfig.json"),
     JSON.stringify({
@@ -78,9 +81,10 @@ try {
         exactOptionalPropertyTypes: true,
         skipLibCheck: false,
         noEmit: true,
-        types: [],
+        types: ["node"],
       },
       files: ["consumer.ts"],
+      include: ["examples/**/*.ts"],
     }),
   );
   await run(process.execPath, [
@@ -114,6 +118,7 @@ try {
       "operations.test.mjs",
       "run.test.mjs",
       "agents.test.mjs",
+      "examples.test.mjs",
     ]);
     await run(process.execPath, ["operations-script.mjs"]);
   }

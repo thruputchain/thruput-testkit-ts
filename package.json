@@ -32,6 +32,11 @@
     "test:smoke": "node tests/consumer-smoke.mjs",
     "test:package": "node scripts/test-package.mjs",
     "test:integration": "npm run build && node scripts/run-integration.mjs",
+    "example:transfer": "tsx examples/01-local-transfer.ts",
+    "example:counter": "tsx examples/02-deploy-counter.ts",
+    "example:agents": "tsx examples/03-concurrent-agents.ts",
+    "example:deploy": "tsx examples/04-deployment-run.ts",
+    "example:reconcile": "tsx examples/05-reconcile-run.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
@@ -44,6 +49,7 @@
     "@types/node": "25.9.1",
     "prettier": "3.8.3",
     "tsdown": "0.22.2",
+    "tsx": "^4.23.15",
     "typescript": "6.0.3",
     "vitest": "4.1.12"
   }
