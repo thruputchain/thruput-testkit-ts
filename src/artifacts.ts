@@ -16,7 +16,23 @@ export interface ScenarioArtifact {
   ): ContractDeployment;
 }
 
-/** Load named RV32 files. Use matching CLI-generated method descriptors. */
+/**
+ * Load named RV32 files. Use matching CLI-generated method descriptors.
+ *
+ * Files are read once and retained in memory. Preparing a deployment predicts
+ * its address; {@link ActorOperations.deploy} signs and sends it.
+ *
+ * @example
+ * ```ts
+ * import { loadArtifacts } from "@thruputchain/testkit";
+ *
+ * const artifacts = await loadArtifacts({
+ *   counter: new URL("./fixtures/counter.rv32a", import.meta.url),
+ * });
+ * const deployment = artifacts.counter.prepare(alice.account.address);
+ * await alice.deploy(deployment, { amount: 50_000_000n });
+ * ```
+ */
 export async function loadArtifacts<TName extends string>(
   paths: Readonly<Record<TName, string | URL>>,
 ): Promise<Readonly<Record<TName, ScenarioArtifact>>> {

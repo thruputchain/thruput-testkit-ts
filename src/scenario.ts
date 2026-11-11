@@ -48,7 +48,11 @@ export interface ScenarioOptions<
   readonly network: ClusterThruputClientOptions<TCluster>;
   /** Explicit pubkey accounts, keyed by actor name. No accounts are funded implicitly. */
   readonly accounts: Readonly<Record<TName, PubkeyAccount>>;
-  /** Exclusively create this directory for durable reports and restricted evidence. */
+  /**
+   * Exclusively create this directory for durable reports and restricted evidence.
+   * Requires Linux and an existing parent directory. An existing path is rejected;
+   * each invocation is a new run. Omit for an in-memory report.
+   */
   readonly runDirectory?: string;
   /** SDK hook awaited before broadcast. Throwing prevents submission. */
   readonly onSigned?: (
@@ -65,6 +69,7 @@ export interface Scenario<
   readonly client: ConnectedThruputClient<TCluster>;
   /** Aborted when closed or when the configured network signal is aborted. */
   readonly signal: AbortSignal;
+  /** Named steps and public reports; durable when runDirectory is supplied. */
   readonly run: ScenarioRun;
   /** Run optional, cooperatively cancelled named agents within this scenario. */
   agents<TMessage = never>(
@@ -230,7 +235,28 @@ export async function createScenario<
   }
 }
 
-/** Run an async workflow and close its scenario after success or failure. */
+/**
+ * Run an async workflow and close its scenario after success or failure.
+ *
+ * The external node remains running. Supply SDK pubkey accounts and the trusted
+ * expected network identity. Funding is the caller's responsibility. Use
+ * {@link withLocalScenario} when the testkit should own the node instead.
+ *
+ * @example
+ * With an already-funded SDK account named `deployer`:
+ * ```ts
+ * import { localnet } from "@thruputchain/client";
+ * import { withScenario } from "@thruputchain/testkit";
+ *
+ * await withScenario({
+ *   network: { cluster: localnet({ rpcUrl: "http://127.0.0.1:9545" }) },
+ *   accounts: { deployer },
+ *   runDirectory: "./runs/new-deployment",
+ * }, async (scenario) => {
+ *   console.log(await scenario.actor("deployer").wallet.getBalance());
+ * });
+ * ```
+ */
 export async function withScenario<
   const TCluster extends Cluster,
   TName extends string,

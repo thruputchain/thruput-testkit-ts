@@ -28,6 +28,8 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
+    "docs": "typedoc",
+    "docs:check": "typedoc --emit none",
     "test": "vitest run && node --test scripts/integration-config.test.mjs",
     "test:smoke": "node tests/consumer-smoke.mjs",
     "test:package": "node scripts/test-package.mjs",
@@ -50,6 +52,7 @@
     "prettier": "3.8.3",
     "tsdown": "0.22.2",
     "tsx": "^4.23.15",
+    "typedoc": "0.28.19",
     "typescript": "6.0.3",
     "vitest": "4.1.12"
   }

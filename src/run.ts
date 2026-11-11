@@ -15,6 +15,7 @@ import {
 } from "@thruputchain/client";
 import type { ActorOperations } from "./operations.js";
 
+/** JSON report value. Bigints use decimal strings; receipt bytes use 0x-prefixed hex. */
 export type ReportValue =
   | null
   | boolean
@@ -37,6 +38,7 @@ export function reportValue(value: unknown): ReportValue {
     );
   throw new TypeError("Value cannot be encoded in a run report");
 }
+/** One recorded operation. Commitment does not by itself imply successful execution. */
 export interface RunAttempt {
   id: string;
   actor: string;
@@ -47,8 +49,10 @@ export interface RunAttempt {
   state: "intent" | "signed" | "committed";
   transactionHash?: string;
   receipt?: ReportValue;
+  /** The operation threw. Its transaction can still have committed. */
   stopped?: boolean;
 }
+/** Public run snapshot, with base58 identities and no signer secrets or signed bytes. */
 export interface RunReport {
   schemaVersion: 1;
   id: string;
@@ -58,12 +62,31 @@ export interface RunReport {
   steps: { name: string; state: "running" | "completed" | "failed" }[];
   attempts: RunAttempt[];
 }
+/**
+ * Named workflow steps and public reports.
+ *
+ * A durable run writes intent and restricted signed evidence before dispatch.
+ * Its directory uses mode 0700 and evidence files use 0600. Share the public
+ * report rather than the whole directory. Faucet requests do not pass through
+ * the wallet evidence hook and need their own SDK funding evidence.
+ */
 export interface ScenarioRun {
   readonly id: string;
   readonly directory?: string;
   /** Public snapshot. Contains no signer objects or signed transaction bytes. */
   report(): RunReport;
-  /** Names are unique within a run. Results pass through without being persisted. */
+  /**
+   * Names are unique within a run. Results pass through without being persisted.
+   * Await all work in the callback. A failed step does not prove transaction failure.
+   *
+   * @example
+   * ```ts
+   * const result = await scenario.run.step("deploy-counter", () =>
+   *   alice.deploy(deployment, { amount: 50_000_000n }),
+   * );
+   * console.log(result.address);
+   * ```
+   */
   step<T>(name: string, action: () => Promise<T>): Promise<T>;
 }
 /** A persistence failure can follow commitment. Inspect the retained evidence. */
@@ -339,6 +362,7 @@ export async function inspectRun(directory: string): Promise<RunReport> {
   }
   return value;
 }
+/** Current read-only observation of one attempt; missing receipts remain unresolved. */
 export interface RunObservation {
   readonly attemptId: string;
   readonly transactionHash?: string;
@@ -347,7 +371,26 @@ export interface RunObservation {
   /** An observation error never proves transaction failure. */
   readonly error?: unknown;
 }
-/** Query original attempts once, without writing files or submitting transactions. */
+/**
+ * Query original attempts once, without writing files or submitting transactions.
+ *
+ * Checks network identity and validates saved signed evidence, including evidence
+ * saved just before an interruption prevented the public report update. The
+ * deadline defaults to 30 seconds. Individual read errors are retained in the
+ * observations; invalid reports, corrupt evidence, and network mismatches throw.
+ * A missing receipt or an unknown status is not proof that the transaction failed.
+ *
+ * @example
+ * With a connected SDK client for the original network:
+ * ```ts
+ * import { reconcileRun } from "@thruputchain/testkit";
+ *
+ * const result = await reconcileRun("./runs/deployment", client);
+ * for (const observation of result.observations) {
+ *   console.log(observation.transactionHash, observation.receipt, observation.error);
+ * }
+ * ```
+ */
 export async function reconcileRun(
   directory: string,
   client: Pick<

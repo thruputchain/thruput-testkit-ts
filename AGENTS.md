@@ -35,6 +35,6 @@ The integration harness was adapted from the SDK harness. It is internal qualifi
 
 ## Review and release
 
-GH-608 tracks the workstream. GH-612 and GH-610 are committed; GH-615 is blocked on a supported external manual-block control interface. GH-616's five runnable examples are approved for implementation, review, and testing. Pause for user review after GH-616. Generated API documentation is deferred to GH-614; do not add custom documentation files.
+GH-608 tracks the workstream. GH-612, GH-610, and GH-616 are complete and committed; GH-615 is blocked on a supported external manual-block control interface. GH-614's generated API documentation is approved for implementation. Use TypeDoc with source comments and generated output in docs/api/; do not add custom documentation files. Consumer migration and publication require separate approval.
 
 Commit, push, publish, or create a remote repository only when requested. Live CI is opt-in and requires this repository to have access to the configured runtime runner.

@@ -4,12 +4,20 @@ import type { Cluster } from "@thruputchain/client";
 import type { Actor } from "./scenario.js";
 import type { ScenarioOperations, ObserveOptions } from "./operations.js";
 
+/** Repeatable inputs keyed by seed and actor name, independent of unrelated agents. */
 export interface AgentRandom {
   /** Deterministic value in [0, 1). Not a cryptographic secret generator. */
   next(): number;
+  /** Uniform integer from zero through maxExclusive - 1; maximum is a positive safe integer. */
   integer(maxExclusive: number): number;
+  /** Generate up to 1,048,576 repeatable bytes. Do not use them as signing secrets. */
   bytes(length: number): Uint8Array;
 }
+/**
+ * One agent's scoped actor, copied messages, and cooperative cancellation signal.
+ * Await its work before returning. The context is cancelled when its callback
+ * ends; helper reads and writes share the parent scenario's confirmed height.
+ */
 export interface AgentContext<
   TCluster extends Cluster,
   TName extends string,
@@ -21,6 +29,7 @@ export interface AgentContext<
   readonly random: AgentRandom;
   /** Copies the payload. Shared memory and nonserializable values are rejected. */
   send(to: TName, value: TMessage): void;
+  /** Wait for the next copied message, bounded by the configured wait deadline. */
   receive(options?: {
     timeoutMs?: number;
   }): Promise<{ from: TName; value: TMessage }>;
@@ -29,6 +38,7 @@ export interface AgentContext<
   readonly view: ScenarioOperations["view"];
   readonly observe: ScenarioOperations["observe"];
 }
+/** An async participant using an existing named scenario actor. */
 export interface AgentDefinition<
   TCluster extends Cluster,
   TName extends string,
@@ -40,6 +50,7 @@ export interface AgentDefinition<
     context: AgentContext<TCluster, TName, TMessage>,
   ) => Promise<void>;
 }
+/** Group deadlines and message limits. Seeded inputs do not determine async scheduling. */
 export interface AgentOptions {
   readonly seed: string;
   /** Whole-group deadline. Defaults to 30 seconds. */
@@ -48,9 +59,11 @@ export interface AgentOptions {
   readonly waitTimeoutMs?: number;
   /** Maximum cooperative teardown wait after failure. Defaults to one second. */
   readonly teardownTimeoutMs?: number;
+  /** Per-recipient queue capacity. Defaults to 1024; a full queue rejects sends. */
   readonly maxQueuedMessages?: number;
   readonly signal?: AbortSignal;
 }
+/** Agent and operation context with the original error available as cause. */
 export class AgentError extends Error {
   constructor(
     readonly agent: string,
@@ -62,6 +75,10 @@ export class AgentError extends Error {
     this.name = "AgentError";
   }
 }
+/**
+ * Group failure with original agent errors and names still running at teardown.
+ * Cancellation is cooperative; callbacks that ignore their signal can continue.
+ */
 export class AgentGroupError extends AggregateError {
   constructor(
     errors: unknown[],

@@ -1,0 +1,15 @@
+{
+  "name": "@thruputchain/testkit",
+  "entryPoints": ["src/index.ts"],
+  "out": "docs/api",
+  "readme": "README.md",
+  "tsconfig": "tsconfig.json",
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "disableSources": true,
+  "cleanOutputDir": true,
+  "githubPages": true,
+  "treatWarningsAsErrors": true
+}

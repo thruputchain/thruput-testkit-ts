@@ -116,9 +116,12 @@ The counter artifact is an Apache-2.0 test fixture, not a release-qualified appl
 
 ## Development
 
+Generate the API reference from source comments with `npm run docs`, then open `docs/api/index.html`. Generated files are not committed. `npm run docs:check` validates the reference without writing files.
+
 ```sh
 npm run format:check
 npm run typecheck
+npm run docs:check
 npm test
 npm run build
 npm run test:package

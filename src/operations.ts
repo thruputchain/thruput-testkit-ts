@@ -40,26 +40,33 @@ export const SCENARIO_GAS = Object.freeze({
   deployment: gasAmount(10_000_000n),
 });
 
+/** SDK receipt-wait controls. The scenario supplies the expected network hash. */
 export type ObserveOptions = Omit<
   WaitForTransactionReceiptOptions,
   "expectedNetworkHash"
 >;
+/** Controls for preparing and sending one transaction. Writes are never retried. */
 export interface SubmitOptions {
+  /** Root budget. Defaults to child budgets plus SCENARIO_GAS.walletOverhead. */
   readonly gasLimit?: GasAmount;
+  /** Optional transaction expiry window, in blocks. */
   readonly expiryBlocks?: bigint;
   /** Bounds submission after signing; defaults to 30 seconds. */
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
 }
+/** Submission controls plus separate receipt observation controls. */
 export interface CallOptions extends SubmitOptions {
   readonly wait?: ObserveOptions;
 }
+/** Atomic deployment controls. The default root budget is SCENARIO_GAS.deployment. */
 export interface DeployOptions extends Omit<CallOptions, "expiryBlocks"> {
   /** Exact raw native-token storage allocation. Zero explicitly skips funding. */
   readonly amount: bigint;
   /** Ordinary generated call to the prepared address, executed atomically. */
   readonly initializer?: ContractCall;
 }
+/** Original signed evidence and repeatable, read-only receipt observation. */
 export interface SubmittedCalls<TCalls extends readonly ContractCall[]> {
   readonly submission: SubmissionEvidence;
   /** Read-only; can be called again after a timeout or cancellation. */
@@ -67,6 +74,7 @@ export interface SubmittedCalls<TCalls extends readonly ContractCall[]> {
     options?: ObserveOptions,
   ): Promise<ExecutionResult & { values: CallResults<TCalls> }>;
 }
+/** Typed helpers over SDK transactions and generated contract descriptors. */
 export interface ActorOperations {
   /** Submit once without waiting for a receipt. No write is retried. */
   submit<const TCalls extends readonly ContractCall[]>(
@@ -84,22 +92,36 @@ export interface ActorOperations {
     options: DeployOptions,
   ): Promise<ExecutionResult & { address: ContractAddress }>;
 }
+/** Controls for waiting until a contract read includes its confirmed dependencies. */
 export interface ViewOptions {
   /** Additional dependency, combined with the scenario's confirmed height. */
   readonly minStateBlockHeight?: bigint;
+  /** Overall read deadline. Defaults to 30 seconds. */
   readonly timeoutMs?: number;
+  /** Delay between stale-snapshot reads. Defaults to 50 milliseconds. */
   readonly pollingIntervalMs?: number;
   readonly signal?: AbortSignal;
 }
+/** Shared receipt observation and confirmed-height reads across scenario actors. */
 export interface ScenarioOperations {
   /** Highest known committed height, including failed executions and stopped waits. */
   readonly confirmedHeight: bigint;
-  /** Observe original signed evidence without sending it again. */
+  /**
+   * Observe original signed evidence without sending it again.
+   * On submission or observation failure, SDK TransactionObservationError retains
+   * this evidence in `error.submission`. Execution errors retain their receipts.
+   * Cancellation cannot undo a transaction that was already sent.
+   */
   observe(
     submission: SubmissionEvidence,
     options?: ObserveOptions,
   ): Promise<ExecutionResult>;
-  /** Wait for a snapshot that includes all previously observed scenario writes. */
+  /**
+   * Wait for a snapshot that includes all previously observed scenario writes.
+   * Captures the required height when called; it does not wait for concurrent
+   * writes that have not been observed. For direct SDK writes, supply their
+   * receipt height through `minStateBlockHeight`. Only stale-snapshot errors retry.
+   */
   view<TResult, TException>(
     request: ContractViewRequest<TResult, TException>,
     options?: ViewOptions,

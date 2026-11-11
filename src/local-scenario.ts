@@ -27,9 +27,11 @@ export const LOCAL_RUNTIME = Object.freeze({
 });
 type LocalCluster = ReturnType<typeof localnet>;
 
+/** Configuration for an isolated Linux node with explicit genesis funding. */
 export interface LocalScenarioOptions<TName extends string = string> {
   /** Public test seed. These repeatable accounts are for disposable local nodes. */
   readonly seed: string;
+  /** Named allocations. The seed and each name determine its test account. */
   readonly accounts: Readonly<Record<TName, FixtureAccount>>;
   /** Installed CLI executable. Defaults to thruput on PATH. */
   readonly cli?: string;
@@ -43,11 +45,13 @@ export interface LocalScenarioOptions<TName extends string = string> {
   readonly startupTimeoutMs?: number;
   /** Cancellation closes the node even if the workflow is still running. */
   readonly signal?: AbortSignal;
+  /** Defaults to instant. Manual block production is not supported. */
   readonly blockDriver?: "instant" | "interval";
   readonly requiredMethods?: ClusterThruputClientOptions<LocalCluster>["requiredMethods"];
   readonly onSigned?: ScenarioOptions<LocalCluster, TName>["onSigned"];
 }
 
+/** A scenario that owns its node process, temporary state, and fixture accounts. */
 export interface LocalScenario<TName extends string = string> extends Scenario<
   LocalCluster,
   TName
@@ -64,7 +68,14 @@ export interface LocalScenario<TName extends string = string> extends Scenario<
   };
 }
 
-/** Start an isolated Linux node with explicit, deterministic genesis accounts. */
+/**
+ * Start an isolated Linux node with explicit, deterministic genesis accounts.
+ *
+ * Requires the CLI version in {@link LOCAL_RUNTIME} on PATH, or an explicit
+ * `cli` executable. Startup checks runtime and network identity. Each scenario
+ * uses its own directory and ports. Close the returned scenario in `finally`,
+ * or use {@link withLocalScenario} for callback-scoped cleanup.
+ */
 export async function createLocalScenario<TName extends string>(
   options: LocalScenarioOptions<TName>,
 ): Promise<LocalScenario<TName>> {
@@ -314,7 +325,24 @@ export async function createLocalScenario<TName extends string>(
   }
 }
 
-/** Run a local workflow and await owned-node cleanup on every exit path. */
+/**
+ * Run a local workflow and await owned-node cleanup on every exit path.
+ *
+ * Account allocations use raw native-token units; account storage consumes part
+ * of each allocation. Seeded accounts are for disposable test networks.
+ *
+ * @example
+ * ```ts
+ * import { withLocalScenario } from "@thruputchain/testkit";
+ *
+ * await withLocalScenario({
+ *   seed: "example",
+ *   accounts: { alice: { initialStorageTokens: 1_000_000_000n } },
+ * }, async (scenario) => {
+ *   console.log(await scenario.actor("alice").wallet.getBalance());
+ * });
+ * ```
+ */
 export async function withLocalScenario<TName extends string, TResult>(
   options: LocalScenarioOptions<TName>,
   run: (scenario: LocalScenario<TName>) => Promise<TResult>,
