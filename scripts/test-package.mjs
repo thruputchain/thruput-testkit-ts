@@ -10,6 +10,7 @@ const exec = promisify(execFile);
 const root = fileURLToPath(new URL("../", import.meta.url));
 const work = await mkdtemp(join(tmpdir(), "thruput-testkit-package-"));
 const live = process.argv.includes("--live");
+const managed = process.argv.includes("--managed");
 
 async function run(command, args, cwd = work) {
   const result = await exec(command, args, {
@@ -86,13 +87,15 @@ try {
     "tsconfig.json",
   ]);
   await run(process.execPath, ["consumer-smoke.mjs"]);
+  await run(process.execPath, ["--test", "interruption.test.mjs"]);
   if (live) {
     assert.ok(process.env.THRUPUT_RPC_URL, "--live requires THRUPUT_RPC_URL");
     await run(process.execPath, ["--test", "live.test.mjs"]);
     await run(process.execPath, ["live-script.mjs"]);
   }
+  if (managed) await run(process.execPath, ["--test", "managed.test.mjs"]);
   console.log(
-    `Packed testkit checks passed${live ? " (including real-node test and script)" : ""}.`,
+    `Packed testkit checks passed${live ? " (including real-node test and script)" : ""}${managed ? " (including managed fixtures)" : ""}.`,
   );
 } finally {
   await rm(work, { recursive: true, force: true });

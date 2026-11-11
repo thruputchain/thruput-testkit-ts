@@ -2,7 +2,7 @@
 
 Run application scenarios from Node.js tests and scripts using the public Thruput SDK.
 
-This first slice attaches to an existing node and binds explicit accounts to named actors. Each actor exposes an ordinary SDK wallet. Generated bindings keep their existing argument and result types.
+Start an isolated local node or attach to an existing network. Each named actor exposes an ordinary SDK wallet. Generated bindings keep their existing argument and result types.
 
 ## Package and runtime
 
@@ -20,7 +20,55 @@ npm pack
 
 Install that tarball in a consumer project alongside `@thruputchain/client@0.26.0`. The example below also imports `@thruputchain/protocol@0.20.0` for the native token address.
 
-## Use a scenario
+## Start a local scenario
+
+Managed local nodes require Linux, `thruput` CLI 0.44.0 on PATH, and the native libraries required by devnode 0.1.32. Install the CLI with `cargo install thruput@0.44.0 --locked`. The CLI downloads devnode into each fixture's private cache, so startup requires download access. The testkit checks CLI 0.44.0 and wire format 14.4.0 before returning a scenario. `LOCAL_RUNTIME` exports these pins.
+
+Process cleanup requires `ps` from procps. Real-node checks have passed on Linux x86-64 with Node 24 and the Node 22.12 runtime floor. The qualified devnode links to glibc, libstdc++, libgcc, libatomic, jemalloc, Snappy, zlib, bzip2, LZ4, Zstandard, OpenSSL 3, and Brotli. Install the corresponding runtime libraries for your distribution.
+
+```ts
+import { withLocalScenario } from "@thruputchain/testkit";
+
+await withLocalScenario(
+  {
+    seed: "transfer-test-v1",
+    accounts: {
+      alice: { initialStorageTokens: 1_000_000_000n },
+      bob: { initialStorageTokens: 1_000_000_000n },
+    },
+  },
+  async (scenario) => {
+    const alice = scenario.actor("alice");
+    console.log(await alice.wallet.getBalance());
+  },
+);
+```
+
+The seed and actor name determine each Ed25519 account. Reordering actors or changing allocations does not change their addresses. These are public, repeatable test identities for disposable local nodes. Hosted workflows use supplied signers through `withScenario`.
+
+`initialStorageTokens` is an explicit genesis allocation in raw native-token units, from `1n` through `9223372036854775807n`. Account storage consumes part of this allocation; the spendable balance can be lower. Choose enough funds for storage and the planned transactions. The testkit writes only public keys and allocations to disk. It does not request faucet funds automatically.
+
+Each fixture owns a private directory, isolated CLI configuration and cache, and OS-assigned ports. Two fixtures can use the same seed without sharing chain state.
+
+### Local options and lifetime
+
+`createLocalScenario(options)` returns the same object without a callback. Close it in `finally`. Both local functions accept:
+
+- `cli`: a CLI executable name or path. Defaults to `thruput`.
+- `directory`: an existing parent directory for a unique fixture directory. Defaults to the OS temporary directory.
+- `keepDirectory`: retain logs and node state after close or failed startup. Defaults to `false`. Startup errors include the last stderr output and retain the original error as `cause`.
+- `startupTimeoutMs`: total startup budget, including installation and discovery. Defaults to 120,000 ms.
+- `signal`: abort startup and close the owned node on cancellation. For a test deadline, pass the test runner's signal or `AbortSignal.timeout(...)`.
+- `blockDriver`: `instant` (default) or `interval`. Manual blocks are not yet supported.
+- `requiredMethods` and `onSigned`: the same discovery requirements and evidence hook used by attached scenarios.
+
+`scenario.local` reports the RPC URL, directory, and supported controls. `manualBlocks` and `snapshots` are `false`; an unsupported block driver fails before startup. RPC capabilities remain available through the SDK client.
+
+`close()` cancels RPC dispatch and waits for the CLI and its backend processes to stop. It is idempotent. Cleanup runs after callback failure, startup failure, timeout, cancellation, and SIGINT/SIGTERM. Signal handlers are installed only while fixtures are owned. Normal signal exit is restored if the application has no handler of its own. SIGKILL and abrupt host termination cannot run cleanup.
+
+Cancellation stops owned processes even if user code is still running. It does not join arbitrary user tasks. Await `close()` to observe cleanup errors. Logs are removed by default; failed process cleanup retains them for diagnosis. Attached nodes remain owned by their callers.
+
+## Attach to a network
 
 The following TypeScript function accepts an existing local node URL and two SDK pubkey accounts. Both accounts must already be funded. It submits one transfer and reads Bob's balance from a snapshot that includes the transaction.
 
@@ -114,7 +162,7 @@ Cancellation does not undo a submitted transaction. Retain its original evidence
 | Existing network                   | Pinned SDK cluster connection                   | Included                                |
 | Scenario and caller                | Async scope, named actors, SDK wallets          | Included; supplied pubkey accounts      |
 | Typed remote methods               | Existing generated descriptors and wallet calls | Included; explicit SDK operations       |
-| Local node and fixture allocations | Managed network adapter                         | GH-609                                  |
+| Local node and fixture allocations | Managed network adapter                         | Included; Linux CLI-backed nodes        |
 | Deployment and consistent reads    | Small helpers over SDK operations               | GH-611                                  |
 | Retained submission evidence       | SDK evidence hook and errors                    | Included; durable run reports in GH-612 |
 | Concurrent agents, mailbox, RNG    | Async functions and explicit coordination       | GH-610                                  |
@@ -122,7 +170,7 @@ Cancellation does not undo a submitted transaction. Retain its original evidence
 | Offline mode and virtual clock     | Add when a concrete consumer needs them         | Deferred                                |
 | Calls by name                      | Existing generated bindings first               | Deferred                                |
 
-Seeded inputs do not guarantee deterministic network scheduling. Agent time and chain time are separate. Node startup, deployment helpers, and manual blocks are not part of this first slice.
+Seeded inputs do not guarantee deterministic network scheduling. Agent time and chain time are separate. Deployment helpers and manual blocks remain separate work items.
 
 ## Verify
 
@@ -136,11 +184,13 @@ npm run test:package
 npm run test:integration
 ```
 
-The package check installs the testkit tarball outside the checkout with the published SDK, checks strict consumer types, and loads ESM and CommonJS exports. The integration command runs the same transfer workflow as a `node:test` test and as a standalone script against a real local node.
+The package check installs the testkit tarball outside the checkout with the published SDK, checks strict consumer types, loads ESM and CommonJS exports, and tests signal cleanup in child processes. Unit tests cover lifecycle failures and deterministic accounts. Managed-process tests run on Linux; other platforms reject managed startup clearly. Attached scenarios use the SDK on supported Node.js platforms.
+
+The integration command runs the same transfer workflow as a `node:test` test and as a standalone script. It also starts two managed fixtures and checks genesis funding, signed transfers, network mismatch rejection, isolation, and attached-node ownership. To run only packed managed-node checks, use `npm run test:package -- --managed` after building.
 
 Live tests require Linux, the CLI version in `scripts/integration-versions.json`, and the native libraries required by that version's devnode. Install the pinned CLI with `cargo install thruput@<version> --locked`, or provide an installed matching CLI through `THRUPUT_CLI`. The harness acquires the pinned devnode in a temporary cache, validates the serving CLI and wire version, and cleans up its processes. It preserves logs after failure. Set `THRUPUT_INTEGRATION_LOG_DIR` to keep diagnostics at a chosen path.
 
-The internal harness was adapted from the SDK's integration harness. It uses the public CLI and lives entirely in this repository. It does not yet provide the public managed-network API planned in GH-609.
+The internal qualification harness was adapted from the SDK's integration harness. It checks the pinned serving identity independently of the public managed-node API.
 
 Live CI is an opt-in workflow dispatch. It requires access to the configured `namespace-profile-hogd-linux-2604` runner; ordinary checks run on GitHub-hosted runners.
 

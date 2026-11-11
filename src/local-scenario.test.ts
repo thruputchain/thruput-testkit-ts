@@ -1,0 +1,217 @@
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  createLocalScenario,
+  withLocalScenario,
+  LOCAL_RUNTIME,
+} from "./local-scenario.js";
+import { createScenario } from "./scenario.js";
+
+vi.mock("./scenario.js", () => ({
+  createScenario: vi.fn(async (options) => ({
+    signal: options.network.signal,
+    actor: (name: string) => ({ account: options.accounts[name] }),
+    client: {
+      getVersionInfo: async () => ({
+        implementation: "0.44.0",
+        wireFormat: "14.4.0",
+      }),
+    },
+    close: async () => {},
+  })),
+}));
+
+let root: string;
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), "testkit-unit-"));
+});
+afterEach(async () => {
+  await rm(root, { recursive: true, force: true });
+});
+
+async function config(mode = "ready") {
+  const cli = join(root, `cli-${mode}`);
+  await writeFile(
+    cli,
+    `#!/usr/bin/env node
+const {writeFileSync} = require('node:fs');
+const {spawn} = require('node:child_process');
+const {createServer} = require('node:http');
+if (process.argv.includes('--version')) { console.log('thruput 0.44.0'); process.exit(0); }
+if (process.argv.includes('install')) process.exit(0);
+const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>{}); setInterval(()=>{},1000)'], {stdio:'ignore'});
+writeFileSync('pids.json', JSON.stringify([process.pid, child.pid]));
+if ('${mode}' === 'fail') process.exit(1);
+if ('${mode}' === 'hang') setInterval(()=>{},1000);
+else {
+ const server = createServer((q,r)=>r.end('{}'));
+ server.listen(0, '127.0.0.1', () => console.log(JSON.stringify({ok:true,command:'node',data:{schemaVersion:5,rpcUrl:'http://127.0.0.1:'+server.address().port}})));
+}
+`,
+    { mode: 0o700 },
+  );
+  return {
+    cli,
+    seed: "seed",
+    accounts: { alice: { initialStorageTokens: 10n } },
+    directory: root,
+    keepDirectory: true,
+  };
+}
+
+async function assertStopped(directory: string) {
+  const pids: number[] = JSON.parse(
+    await readFile(join(directory, "pids.json"), "utf8"),
+  );
+  for (const pid of pids) {
+    // A reparented child can briefly remain a zombie until PID 1 reaps it.
+    const stat = await readFile(`/proc/${pid}/stat`, "utf8").catch(() => "");
+    expect(stat === "" || stat.split(") ")[1]?.startsWith("Z ")).toBe(true);
+  }
+}
+
+it.skipIf(process.platform !== "linux")(
+  "isolates concurrent nodes and reaps descendants on close",
+  async () => {
+    const options = await config();
+    const fixtures = await Promise.all([
+      createLocalScenario(options),
+      createLocalScenario(options),
+    ]);
+    try {
+      expect(fixtures[0]!.local.rpcUrl).not.toBe(fixtures[1]!.local.rpcUrl);
+      expect(fixtures[0]!.local.directory).not.toBe(
+        fixtures[1]!.local.directory,
+      );
+      expect(fixtures[0]!.actor("alice").account.address).toEqual(
+        fixtures[1]!.actor("alice").account.address,
+      );
+    } finally {
+      await Promise.all(fixtures.map((fixture) => fixture.close()));
+    }
+    for (const fixture of fixtures) {
+      await fixture.close();
+      await assertStopped(fixture.local.directory);
+    }
+  },
+  15000,
+);
+
+it.skipIf(process.platform !== "linux")(
+  "cleans up after a callback failure",
+  async () => {
+    let directory = "";
+    const failure = new Error("assertion failed");
+    await expect(
+      withLocalScenario(await config(), async (scenario) => {
+        directory = scenario.local.directory;
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    await assertStopped(directory);
+  },
+  15000,
+);
+
+it.skipIf(process.platform !== "linux").each(["fail", "hang"])(
+  "cleans up startup %s including orphan children",
+  async (mode) => {
+    await expect(
+      createLocalScenario({ ...(await config(mode)), startupTimeoutMs: 1000 }),
+    ).rejects.toThrow("startup failed");
+    const directory = (await readdir(root)).find((name) =>
+      name.startsWith("thruput-testkit-"),
+    )!;
+    await assertStopped(join(root, directory));
+  },
+  15000,
+);
+
+it.skipIf(process.platform !== "linux")(
+  "cancellation closes a ready node without waiting for user work",
+  async () => {
+    const controller = new AbortController();
+    const fixture = await createLocalScenario({
+      ...(await config()),
+      signal: controller.signal,
+    });
+    controller.abort(new Error("cancelled"));
+    expect(fixture.signal.aborted).toBe(true);
+    await fixture.close();
+    await assertStopped(fixture.local.directory);
+  },
+  15000,
+);
+
+it.skipIf(process.platform !== "linux")(
+  "removes temporary files by default",
+  async () => {
+    const fixture = await createLocalScenario({
+      ...(await config()),
+      keepDirectory: false,
+    });
+    await fixture.close();
+    await expect(
+      readFile(join(fixture.local.directory, "allocations.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  },
+  15000,
+);
+
+it("rejects unsupported platforms and controls clearly", async () => {
+  const options = { seed: "seed", accounts: {} };
+  vi.stubGlobal("process", { ...process, platform: "win32" });
+  try {
+    await expect(createLocalScenario(options)).rejects.toThrow("Linux");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+  if (process.platform === "linux")
+    await expect(
+      createLocalScenario({ ...options, blockDriver: "manual" as "instant" }),
+    ).rejects.toThrow("Unsupported block driver");
+});
+
+it("keeps public runtime pins aligned with integration qualification", async () => {
+  expect(LOCAL_RUNTIME).toEqual(
+    JSON.parse(
+      await readFile(
+        new URL("../scripts/integration-versions.json", import.meta.url),
+        "utf8",
+      ),
+    ),
+  );
+});
+
+it.skipIf(process.platform !== "linux")(
+  "rejects an incompatible CLI before starting a node",
+  async () => {
+    const options = await config();
+    await writeFile(options.cli, '#!/bin/sh\necho "thruput 0.1.0"\n', {
+      mode: 0o700,
+    });
+    await expect(createLocalScenario(options)).rejects.toMatchObject({
+      cause: expect.objectContaining({
+        message: expect.stringContaining("Expected Thruput CLI"),
+      }),
+    });
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "cleans up when SDK network discovery fails",
+  async () => {
+    const mismatch = new Error("network mismatch");
+    vi.mocked(createScenario).mockRejectedValueOnce(mismatch);
+    await expect(createLocalScenario(await config())).rejects.toMatchObject({
+      cause: mismatch,
+    });
+    const directory = (await readdir(root)).find((name) =>
+      name.startsWith("thruput-testkit-"),
+    )!;
+    await assertStopped(join(root, directory));
+  },
+  15000,
+);

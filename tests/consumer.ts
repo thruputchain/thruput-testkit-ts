@@ -66,3 +66,19 @@ async function checkTypes() {
 }
 
 void checkTypes;
+import {
+  withLocalScenario,
+  type LocalScenarioOptions,
+} from "@thruputchain/testkit";
+
+const localOptions = {
+  seed: "consumer",
+  accounts: { alice: { initialStorageTokens: 100n } },
+} satisfies LocalScenarioOptions;
+void withLocalScenario(localOptions, async (scenario) => {
+  scenario.actor("alice").wallet;
+  // @ts-expect-error actor names are inferred from fixture declarations
+  scenario.actor("unknown");
+  const manual: false = scenario.local.capabilities.manualBlocks;
+  return manual;
+});

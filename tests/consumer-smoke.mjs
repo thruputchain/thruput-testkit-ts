@@ -10,6 +10,9 @@ import * as esm from "@thruputchain/testkit";
 
 const cjs = createRequire(import.meta.url)("@thruputchain/testkit");
 for (const kit of [esm, cjs]) {
+  assert.equal(typeof kit.createLocalScenario, "function");
+  assert.equal(typeof kit.withLocalScenario, "function");
+  assert.equal(kit.LOCAL_RUNTIME.cli, "0.44.0");
   let saved;
   const result = await kit.withScenario(
     {

@@ -320,9 +320,10 @@ async function main() {
   );
   const tests = launch(
     process.execPath,
-    [join(repo, "scripts/test-package.mjs"), "--live"],
+    [join(repo, "scripts/test-package.mjs"), "--live", "--managed"],
     {
       ...env,
+      THRUPUT_CLI: cli,
       THRUPUT_RPC_URL: ready.rpcUrl,
       THRUPUT_RUNTIME_MANIFEST: ready.runtimeManifestPath,
       THRUPUT_EXPECTED_CLI_VERSION: cliVersion,

@@ -23,7 +23,7 @@
 
 Use public package imports from `@thruputchain/client`. Do not depend on sibling repositories, private SDK source paths, or generated bindings edited by hand. Use `.js` specifiers for local TypeScript imports.
 
-The integration harness was adapted from the SDK harness. It is internal test infrastructure, not the future public managed-network API. Keep its runtime identity checks and process-tree cleanup.
+The integration harness was adapted from the SDK harness. It is internal qualification infrastructure. The public managed-network API is in `src/local-scenario.ts`. Keep runtime identity checks and process-tree cleanup in both paths. Keep `LOCAL_RUNTIME` aligned with `scripts/integration-versions.json`.
 
 ## Behavior
 
@@ -35,6 +35,6 @@ The integration harness was adapted from the SDK harness. It is internal test in
 
 ## Review and release
 
-GH-608 tracks the workstream. Pause after each sub-issue for user review. Changes to GH-613 are currently under review; do not start GH-609 without approval.
+GH-608 tracks the workstream. GH-609 is approved for implementation. Pause for review after GH-609; do not start GH-611 without approval.
 
 Commit, push, publish, or create a remote repository only when requested. Live CI is opt-in and requires this repository to have access to the configured runtime runner.
