@@ -13,6 +13,11 @@ import {
 } from "@thruputchain/client";
 import { createRun, type ScenarioRun } from "./run.js";
 import {
+  createAgentRunner,
+  type AgentDefinition,
+  type AgentOptions,
+} from "./agents.js";
+import {
   createOperations,
   type ActorOperations,
   type ScenarioOperations,
@@ -61,6 +66,11 @@ export interface Scenario<
   /** Aborted when closed or when the configured network signal is aborted. */
   readonly signal: AbortSignal;
   readonly run: ScenarioRun;
+  /** Run optional, cooperatively cancelled named agents within this scenario. */
+  agents<TMessage = never>(
+    definitions: readonly AgentDefinition<TCluster, TName, TMessage>[],
+    options: AgentOptions,
+  ): Promise<void>;
   /** Look up a configured actor. Throws for an unknown name or a closed scenario. */
   actor(name: TName): Actor<TCluster>;
   /**
@@ -145,30 +155,59 @@ export async function createScenario<
     );
     signal.throwIfAborted();
     const operations = createOperations(client, signal, recorder.receipt);
-    for (const [name, account] of accounts) {
+    function bindActor(
+      name: TName,
+      walletClient: ConnectedThruputClient<TCluster>,
+    ): Actor<TCluster> {
+      const account = accounts.get(name)!;
       const signed = async (submission: SubmissionEvidence) => {
         await recorder.signed(name, submission);
         await onSigned?.(name, submission);
       };
       const wallet = createWalletClient({
-        client,
+        client: walletClient,
         account,
         onSigned: signed,
       });
-      actors.set(
+      return Object.freeze({
         name,
-        Object.freeze({
-          name,
-          account,
-          wallet,
-          ...recorder.track(name, operations.actor(wallet, signed)),
-        }),
-      );
+        account,
+        wallet,
+        ...recorder.track(name, operations.actor(wallet, signed)),
+      });
     }
+    for (const name of accounts.keys()) {
+      actors.set(name, bindActor(name, client));
+    }
+    const agents = createAgentRunner<TCluster, TName>(
+      signal,
+      new Set(accounts.keys()),
+      async (name, agentSignal) => {
+        const transport: Transport = {
+          request(method, params, control) {
+            const requestSignal = control?.signal
+              ? AbortSignal.any([agentSignal, control.signal])
+              : agentSignal;
+            requestSignal.throwIfAborted();
+            return scopedTransport.request(method, params, {
+              signal: requestSignal,
+            });
+          },
+        };
+        const agentClient = await createThruputClient({
+          ...options.network,
+          transport,
+          signal: agentSignal,
+        });
+        return bindActor(name, agentClient);
+      },
+      operations.reads,
+    );
     return Object.freeze({
       client,
       signal,
       run: recorder.run,
+      agents,
       get confirmedHeight() {
         return operations.reads.confirmedHeight;
       },

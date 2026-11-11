@@ -113,6 +113,7 @@ try {
       "managed.test.mjs",
       "operations.test.mjs",
       "run.test.mjs",
+      "agents.test.mjs",
     ]);
     await run(process.execPath, ["operations-script.mjs"]);
   }

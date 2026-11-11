@@ -28,6 +28,29 @@ async function checkTypes() {
   const options = { network: { cluster: localnet() }, accounts: { alice } };
   const value: bigint = await withScenario(options, async (scenario) => {
     const actor = scenario.actor("alice");
+    await scenario.agents<{ count: bigint }>(
+      [
+        {
+          name: "alice",
+          async run(ctx) {
+            ctx.send("alice", { count: 1n });
+            const count: bigint = (await ctx.receive()).value.count;
+            // @ts-expect-error Message payloads retain their declared type.
+            ctx.send("alice", { count: "1" });
+            // @ts-expect-error Recipients must name configured actors.
+            ctx.send("bob", { count });
+            const value: bigint = (
+              await ctx.view(
+                Counter.v0_1.get.viewRequest({
+                  address: ctx.actor.account.address,
+                }),
+              )
+            ).value;
+          },
+        },
+      ],
+      { seed: "types" },
+    );
     const stepValue: number = await scenario.run.step(
       "typed-step",
       async () => 42,

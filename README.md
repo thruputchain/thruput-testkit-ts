@@ -177,6 +177,20 @@ Each helper operation reserves a distinct transaction nonce before asynchronous 
 
 SDK execution errors retain their receipts. A decode failure after successful execution also retains its receipt and signed evidence; it is not permission to repeat the write. Both advance the confirmed-height requirement. A submission or observation failure raises `TransactionObservationError` with the original signed evidence and cause. Use `scenario.observe(error.submission)` to inspect that transaction without sending it again. The result is an SDK execution result; use `decodeExecution` with the original calls if typed values are needed. No helper retries writes.
 
+## Concurrent agents
+
+Call `scenario.agents<Message>(definitions, { seed })` to run named async callbacks. Each definition has an existing actor `name` and a `run(context)` function. Duplicate names fail before callbacks start. Coordination is optional; ordinary scripts can use actors directly.
+
+The context provides `actor`, `signal`, `random`, `send`, `receive`, `barrier`, `view`, and `observe`. `send(name, value)` copies the payload with Node's V8 serializer. Shared memory and nonserializable values are rejected. `receive()` returns `{ from, value }`. Each recipient queue holds at most 1024 messages by default; a full queue rejects the send. Use `maxQueuedMessages` to change this limit.
+
+`barrier(name)` waits for every agent in the group. Each name is a one-shot phase; use a new name for the next phase. A failed wait breaks that barrier. Receive and barrier waits accept `{ timeoutMs }`. Await all agent work before returning. An agent's context and wallet are cancelled when its callback ends.
+
+`timeoutMs` bounds the group (default 30 seconds). `waitTimeoutMs` sets the default receive and barrier deadline (default: the group deadline). Failure, an external `signal`, or scenario closure cancels peer waits and SDK requests. Teardown waits at most `teardownTimeoutMs` (default one second). `AgentGroupError.errors` retains agent errors and their original causes; `unfinishedAgents` lists callbacks still running at the teardown deadline. Cancellation is cooperative: JavaScript cannot interrupt a blocking callback or stop unrelated work that ignores its signal.
+
+Agent helpers share the scenario's nonce reservations, confirmed read height, and run report. Cancellation after dispatch preserves the SDK error's signed evidence. Use `scenario.observe(evidence)` to inspect that original transaction after the group stops. An uncertain outcome does not authorize another submission.
+
+Random streams depend on the explicit seed and actor name. Adding unrelated agents does not change an existing actor's stream. `random.next()`, `random.integer(maxExclusive)`, and `random.bytes(length)` generate repeatable inputs, not secrets. Seeded inputs do not make async scheduling deterministic. Barriers coordinate callbacks; they do not establish block timestamps or same-block inclusion.
+
 ## Run reports and reconciliation
 
 Every scenario exposes `scenario.run` with an in-memory public report. Set `runDirectory` on either scenario factory to create a durable run on Linux. Supply a new path inside an existing parent directory. An existing path is rejected: each invocation is a new run, never an automatic resume. Keep this directory separate from disposable node state.
