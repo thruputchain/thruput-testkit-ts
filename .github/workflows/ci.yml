@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      integration:
+        description: Run live tests on the configured Linux runtime runner
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run test:package
+
+  floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.12.0
+      - run: npm ci --omit=dev
+      - run: npm run test:smoke
+
+  # Enable explicitly after this repository has access to the runtime runner.
+  # Ordinary pull requests use hosted runners and never need node binaries.
+  integration:
+    if: github.event_name == 'workflow_dispatch' && inputs.integration
+    runs-on: namespace-profile-hogd-linux-2604
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Read runtime pins
+        id: versions
+        run: node scripts/integration-config.mjs
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # master as of 2026-06
+        with:
+          toolchain: stable
+      - name: Install pinned CLI release
+        env:
+          CLI_VERSION: ${{ steps.versions.outputs.cli }}
+          SOURCE_COMMIT: ${{ steps.versions.outputs.source-commit }}
+        run: |
+          test -z "$SOURCE_COMMIT" || { echo "This workflow requires a published CLI pin"; exit 1; }
+          cargo install "thruput@$CLI_VERSION" --locked
+      - run: npm ci
+      - run: npm run test:integration
+        env:
+          THRUPUT_INTEGRATION_LOG_DIR: ${{ runner.temp }}/testkit-integration
+      - name: Upload runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: testkit-integration
+          path: ${{ runner.temp }}/testkit-integration
+          if-no-files-found: ignore
+          retention-days: 7
