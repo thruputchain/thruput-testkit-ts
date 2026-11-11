@@ -37,6 +37,8 @@ export interface LocalScenarioOptions<TName extends string = string> {
   readonly directory?: string;
   /** Preserve state and logs after close, including failed startup. */
   readonly keepDirectory?: boolean;
+  /** Separate durable run directory; never removed with the managed node. */
+  readonly runDirectory?: string;
   /** Includes runtime installation and RPC discovery. Defaults to 120 seconds. */
   readonly startupTimeoutMs?: number;
   /** Cancellation closes the node even if the workflow is still running. */
@@ -251,6 +253,7 @@ export async function createLocalScenario<TName extends string>(
           requiredMethods: options.requiredMethods,
         },
         accounts,
+        runDirectory: options.runDirectory,
         onSigned: options.onSigned,
       });
       const versionInfo = await scenario.client.getVersionInfo({}, { signal });

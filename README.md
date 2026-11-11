@@ -177,6 +177,22 @@ Each helper operation reserves a distinct transaction nonce before asynchronous 
 
 SDK execution errors retain their receipts. A decode failure after successful execution also retains its receipt and signed evidence; it is not permission to repeat the write. Both advance the confirmed-height requirement. A submission or observation failure raises `TransactionObservationError` with the original signed evidence and cause. Use `scenario.observe(error.submission)` to inspect that transaction without sending it again. The result is an SDK execution result; use `decodeExecution` with the original calls if typed values are needed. No helper retries writes.
 
+## Run reports and reconciliation
+
+Every scenario exposes `scenario.run` with an in-memory public report. Set `runDirectory` on either scenario factory to create a durable run on Linux. Supply a new path inside an existing parent directory. An existing path is rejected: each invocation is a new run, never an automatic resume. Keep this directory separate from disposable node state.
+
+Use `scenario.run.step("deploy-counter", () => alice.deploy(deployment, options))` to name a step. Step names are unique. Callback results pass through to your script; they are not written to disk. Await all work within a step.
+
+The public `report.json` records network identity, public actor addresses, steps, deployment hashes and predicted addresses, transaction hashes, and receipts observed through scenario helpers. Bigints use decimal strings; receipt bytes use `0x`-prefixed hex. Identity fields use base58. `scenario.run.report()` returns an independent snapshot. Reports omit signer objects, arbitrary callback results, error messages, and stacks.
+
+Intent is persisted before a helper prepares its transaction. The signed evidence hook writes restricted evidence before dispatch. Each file update uses a temporary file, file sync, rename, and directory sync. The run and evidence directories use mode `0700`; signed evidence files use `0600`. Share only the public report, not the run directory. A signed attempt remains unresolved until a receipt is observed. A failed script step does not imply that its transaction failed.
+
+`inspectRun(directory)` reads the public report without connecting. `reconcileRun(directory, client, { timeoutMs, signal })` verifies the network and queries the original attempts without sending transactions or modifying files. It can recover signed evidence written just before interruption prevented a public-report update. Its observations retain unknown statuses, missing receipts, and read errors without claiming transaction failure. Corrupt evidence fails validation. A new process can inspect the same run.
+
+To continue a partial workflow, inspect the prior attempts and verify committed state, then create a new run for additional work. Do not repeat an unresolved write. `RunPersistenceError` can occur after commitment and retains signed evidence and the receipt when available.
+
+Direct SDK wallet submissions pass through the evidence hook, but their receipts require explicit observation through the scenario or reconciliation. Low-level signing and RPC calls can bypass tracking. Faucet requests do not use the wallet signing hook: named steps can record their boundaries, but the testkit cannot recover a lost faucet response from wallet evidence. Retain any provider-specific attempt evidence separately; a missing faucet response does not authorize another request.
+
 ## API
 
 ### `withScenario(options, run)`

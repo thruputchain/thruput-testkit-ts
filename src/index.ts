@@ -21,3 +21,11 @@ export type {
   ViewOptions,
   SubmittedCalls,
 } from "./operations.js";
+export { inspectRun, reconcileRun, RunPersistenceError } from "./run.js";
+export type {
+  ScenarioRun,
+  RunReport,
+  RunAttempt,
+  RunObservation,
+  ReportValue,
+} from "./run.js";

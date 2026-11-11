@@ -29,6 +29,7 @@ import {
   type PubkeyAccount,
   type SubmissionEvidence,
   type Transaction,
+  type TransactionReceipt,
   type WaitForTransactionReceiptOptions,
 } from "@thruputchain/client";
 import type { WalletActions } from "@thruputchain/client/wallet";
@@ -115,6 +116,10 @@ function duration(value: number, name: string): number {
 export function createOperations(
   client: ConnectedThruputClient<Cluster>,
   signal: AbortSignal,
+  onReceipt?: (
+    receipt: TransactionReceipt,
+    submission: SubmissionEvidence,
+  ) => Promise<void>,
 ) {
   let nextNonce = randomBytes(8).readBigUInt64BE();
   let confirmedHeight = 0n;
@@ -172,6 +177,7 @@ export function createOperations(
     }
     if (receipt.blockHeight > confirmedHeight)
       confirmedHeight = receipt.blockHeight;
+    await onReceipt?.(receipt, submission);
     assertTransactionSuccess(receipt, submission);
     return { transactionHash: submission.transactionHash, receipt, submission };
   }

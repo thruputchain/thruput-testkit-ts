@@ -14,6 +14,8 @@ import {
   withLocalScenario,
   loadArtifacts,
   type LocalScenarioOptions,
+  inspectRun,
+  reconcileRun,
 } from "@thruputchain/testkit";
 import { Counter } from "./fixtures/counter.js";
 
@@ -26,6 +28,15 @@ async function checkTypes() {
   const options = { network: { cluster: localnet() }, accounts: { alice } };
   const value: bigint = await withScenario(options, async (scenario) => {
     const actor = scenario.actor("alice");
+    const stepValue: number = await scenario.run.step(
+      "typed-step",
+      async () => 42,
+    );
+    const report = scenario.run.report();
+    const runId: string = report.id;
+    const previous = await inspectRun("prior-run");
+    const reconciled = await reconcileRun("prior-run", scenario.client);
+    const network: string = reconciled.report.networkHash;
     // @ts-expect-error Actor names come from the configured account mapping.
     scenario.actor("bob");
     await actor.wallet.requestAirdrop();

@@ -9,7 +9,9 @@ import {
   type PubkeyAccount,
   type SubmissionEvidence,
   type Transport,
+  toBase58,
 } from "@thruputchain/client";
+import { createRun, type ScenarioRun } from "./run.js";
 import {
   createOperations,
   type ActorOperations,
@@ -41,6 +43,8 @@ export interface ScenarioOptions<
   readonly network: ClusterThruputClientOptions<TCluster>;
   /** Explicit pubkey accounts, keyed by actor name. No accounts are funded implicitly. */
   readonly accounts: Readonly<Record<TName, PubkeyAccount>>;
+  /** Exclusively create this directory for durable reports and restricted evidence. */
+  readonly runDirectory?: string;
   /** SDK hook awaited before broadcast. Throwing prevents submission. */
   readonly onSigned?: (
     actor: TName,
@@ -56,6 +60,7 @@ export interface Scenario<
   readonly client: ConnectedThruputClient<TCluster>;
   /** Aborted when closed or when the configured network signal is aborted. */
   readonly signal: AbortSignal;
+  readonly run: ScenarioRun;
   /** Look up a configured actor. Throws for an unknown name or a closed scenario. */
   actor(name: TName): Actor<TCluster>;
   /**
@@ -128,14 +133,27 @@ export async function createScenario<
     signal.throwIfAborted();
     const actors = new Map<TName, Actor<TCluster>>();
     const onSigned = options.onSigned;
-    const operations = createOperations(client, signal);
+    const recorder = await createRun(
+      client.network.networkHash,
+      Object.fromEntries(
+        [...accounts].map(([name, account]) => [
+          name,
+          toBase58(account.address),
+        ]),
+      ),
+      options.runDirectory,
+    );
+    signal.throwIfAborted();
+    const operations = createOperations(client, signal, recorder.receipt);
     for (const [name, account] of accounts) {
+      const signed = async (submission: SubmissionEvidence) => {
+        await recorder.signed(name, submission);
+        await onSigned?.(name, submission);
+      };
       const wallet = createWalletClient({
         client,
         account,
-        onSigned: onSigned
-          ? (submission) => onSigned(name, submission)
-          : undefined,
+        onSigned: signed,
       });
       actors.set(
         name,
@@ -143,16 +161,14 @@ export async function createScenario<
           name,
           account,
           wallet,
-          ...operations.actor(
-            wallet,
-            onSigned ? (submission) => onSigned(name, submission) : undefined,
-          ),
+          ...recorder.track(name, operations.actor(wallet, signed)),
         }),
       );
     }
     return Object.freeze({
       client,
       signal,
+      run: recorder.run,
       get confirmedHeight() {
         return operations.reads.confirmedHeight;
       },
@@ -166,6 +182,7 @@ export async function createScenario<
       },
       async close() {
         controller.abort(new Error("Scenario is closed"));
+        await recorder.flush();
       },
     });
   } catch (error) {

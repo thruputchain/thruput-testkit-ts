@@ -35,6 +35,6 @@ The integration harness was adapted from the SDK harness. It is internal qualifi
 
 ## Review and release
 
-GH-608 tracks the workstream. GH-611 is approved for implementation. Pause for review after GH-611 before starting another sub-issue. Generated API documentation is deferred to GH-614; do not add custom documentation files.
+GH-608 tracks the workstream. GH-612, GH-610, and GH-615 are approved for implementation, review, testing, and separate commits. Pause before GH-616 so the user can discuss runnable examples. Generated API documentation is deferred to GH-614; do not add custom documentation files.
 
 Commit, push, publish, or create a remote repository only when requested. Live CI is opt-in and requires this repository to have access to the configured runtime runner.
