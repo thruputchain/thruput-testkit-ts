@@ -8,3 +8,16 @@ export {
 } from "./local-scenario.js";
 export type { LocalScenario, LocalScenarioOptions } from "./local-scenario.js";
 export type { FixtureAccount } from "./fixtures.js";
+export { loadArtifacts } from "./artifacts.js";
+export type { ScenarioArtifact } from "./artifacts.js";
+export { SCENARIO_GAS } from "./operations.js";
+export type {
+  ActorOperations,
+  ScenarioOperations,
+  SubmitOptions,
+  CallOptions,
+  DeployOptions,
+  ObserveOptions,
+  ViewOptions,
+  SubmittedCalls,
+} from "./operations.js";

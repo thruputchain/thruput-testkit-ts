@@ -8,7 +8,14 @@ import {
 } from "@thruputchain/client";
 import { ERC20 } from "@thruputchain/client/contracts";
 import { NATIVE_TOKEN_ADDRESS } from "@thruputchain/protocol";
-import { withScenario, createScenario } from "@thruputchain/testkit";
+import {
+  withScenario,
+  createScenario,
+  withLocalScenario,
+  loadArtifacts,
+  type LocalScenarioOptions,
+} from "@thruputchain/testkit";
+import { Counter } from "./fixtures/counter.js";
 
 // Compiled against an installed tarball, never run. Negative cases protect the
 // generated-binding and capability types across the package boundary.
@@ -33,6 +40,26 @@ async function checkTypes() {
       gasLimit: gasAmount(1_000_000n),
     });
     const returned: bigint = result.values[0];
+    const submitted = await actor.submit([
+      typedCall,
+      ERC20.v0_1.transfer.call({
+        address: NATIVE_TOKEN_ADDRESS,
+        gasLimit: gasAmount(500_000n),
+        args: { receiver: actor.account.address, amount: 1n },
+      }),
+    ]);
+    const typedResults = await submitted.wait();
+    const first: bigint = typedResults.values[0];
+    const second: void = typedResults.values[1];
+    // @ts-expect-error A void return cannot become a bigint.
+    const invalidResult: bigint = typedResults.values[1];
+    const consistent = await scenario.view(
+      ERC20.v0_1.getBalanceOf.viewRequest({
+        address: NATIVE_TOKEN_ADDRESS,
+        args: { addr: actor.account.address },
+      }),
+    );
+    const balance: bigint = consistent.value;
     // @ts-expect-error A typed contract result cannot become a string.
     const wrong: string = result.values[0];
     const view = await ERC20.v0_1.getBalanceOf.view({
@@ -66,10 +93,6 @@ async function checkTypes() {
 }
 
 void checkTypes;
-import {
-  withLocalScenario,
-  type LocalScenarioOptions,
-} from "@thruputchain/testkit";
 
 const localOptions = {
   seed: "consumer",
@@ -80,5 +103,27 @@ void withLocalScenario(localOptions, async (scenario) => {
   // @ts-expect-error actor names are inferred from fixture declarations
   scenario.actor("unknown");
   const manual: false = scenario.local.capabilities.manualBlocks;
+  const artifacts = await loadArtifacts({ counter: "counter.rv32a" });
+  // @ts-expect-error Artifact names come from the supplied mapping.
+  artifacts.unknown;
+  const actor = scenario.actor("alice");
+  const deployment = artifacts.counter.prepare(actor.account.address);
+  const deployed = await actor.deploy(deployment, {
+    amount: 50_000_000n,
+    initializer: Counter.v0_1.initialize.call({
+      address: deployment.address,
+      gasLimit: gasAmount(500_000n),
+      args: { initialValue: 42n },
+    }),
+  });
+  // @ts-expect-error Storage funding must be explicit, including zero.
+  await actor.deploy(deployment, {});
+  const result = await actor.call([
+    Counter.v0_1.get.call({
+      address: deployed.address,
+      gasLimit: gasAmount(500_000n),
+    }),
+  ]);
+  const count: bigint = result.values[0];
   return manual;
 });

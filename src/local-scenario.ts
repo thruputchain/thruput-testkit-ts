@@ -276,7 +276,14 @@ export async function createLocalScenario<TName extends string>(
       clearTimeout(timer);
       finishStartup();
     }
-    return Object.freeze({ ...scenario!, local, close: () => close() });
+    return Object.freeze({
+      ...scenario!,
+      get confirmedHeight() {
+        return scenario!.confirmedHeight;
+      },
+      local,
+      close: () => close(),
+    });
   } catch (error) {
     let diagnostics = "";
     for (const label of ["install", "node"])

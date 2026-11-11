@@ -53,6 +53,8 @@ try {
         "@thruputchain/client": pkg.dependencies["@thruputchain/client"],
         "@thruputchain/testkit": `file:./${testkit.filename}`,
         "@thruputchain/protocol": pkg.devDependencies["@thruputchain/protocol"],
+        "@thruputchain/contract-spec":
+          pkg.devDependencies["@thruputchain/contract-spec"],
       },
     }),
   );
@@ -93,7 +95,26 @@ try {
     await run(process.execPath, ["--test", "live.test.mjs"]);
     await run(process.execPath, ["live-script.mjs"]);
   }
-  if (managed) await run(process.execPath, ["--test", "managed.test.mjs"]);
+  if (managed) {
+    await run(process.execPath, [
+      join(root, "node_modules/typescript/bin/tsc"),
+      "--ignoreConfig",
+      "fixtures/counter.ts",
+      "--target",
+      "ES2022",
+      "--module",
+      "NodeNext",
+      "--outDir",
+      "generated",
+      "--strict",
+    ]);
+    await run(process.execPath, [
+      "--test",
+      "managed.test.mjs",
+      "operations.test.mjs",
+    ]);
+    await run(process.execPath, ["operations-script.mjs"]);
+  }
   console.log(
     `Packed testkit checks passed${live ? " (including real-node test and script)" : ""}${managed ? " (including managed fixtures)" : ""}.`,
   );

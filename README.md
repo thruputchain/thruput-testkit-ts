@@ -115,7 +115,67 @@ export async function transfer(
 
 Call `transfer` from a standalone script or await it inside `node:test` or Vitest. A real-node scenario is an integration test. The testkit does not execute contracts in process.
 
-The view rejects a stale snapshot; it does not wait for one. Keep write evidence before starting dependent reads. The runnable [local workflow](tests/live-workflow.mjs) demonstrates bounded snapshot polling and explicit faucet funding. Shared consistent-read helpers are planned in GH-611.
+The SDK view rejects a stale snapshot; it does not wait for one. Keep write evidence before starting dependent reads. The runnable [local workflow](tests/live-workflow.mjs) demonstrates explicit SDK operations and faucet funding. Use the scenario helpers below to carry confirmed heights into dependent reads automatically.
+
+## Typed operations
+
+Actors provide `call`, `submit`, and `deploy` alongside their ordinary SDK `wallet`. Pass calls built by generated descriptors. Child gas budgets remain explicit. By default, `call` and `submit` use the sum of those budgets plus `SCENARIO_GAS.walletOverhead` (500,000 gas). Deployment uses `SCENARIO_GAS.deployment` (10,000,000 gas). Override the root budget with `gasLimit`. These are budgets, not estimates.
+
+Load named artifacts once, then prepare a deployment for an actor:
+
+```ts
+import { gasAmount } from "@thruputchain/client";
+import { loadArtifacts } from "@thruputchain/testkit";
+import { Counter } from "./target/thruput/counter.js";
+
+const artifacts = await loadArtifacts({
+  counter: "./target/thruput/counter.rv32a",
+});
+// Inside a scenario callback:
+const alice = scenario.actor("alice");
+const bob = scenario.actor("bob");
+const deployment = artifacts.counter.prepare(alice.account.address);
+const address = deployment.address;
+const gasLimit = gasAmount(500_000n);
+
+await alice.deploy(deployment, {
+  amount: 50_000_000n,
+  initializer: Counter.v0_1.initialize.call({
+    address,
+    gasLimit,
+    args: { initialValue: 42n },
+  }),
+});
+const result = await bob.call([
+  Counter.v0_1.increment.call({ address, gasLimit, args: { amount: 5n } }),
+  Counter.v0_1.get.call({ address, gasLimit }),
+]);
+// result.values is typed as [void, bigint]. Events remain in result.receipt.
+const current = await scenario.view(Counter.v0_1.get.viewRequest({ address }));
+// current.value is 47n; its snapshot includes Bob's confirmed transaction.
+```
+
+Use bindings generated from the matching artifact. `loadArtifacts` retains the bytes in memory. `prepare` uses the SDK to predict an address without sending anything; an optional second argument sets the deployment nonce. `deploy` requires an explicit storage-funding `amount`, including zero to skip funding. Funding, deployment, and optional initialization form one atomic transaction. Initializer return data is discarded by the SDK wallet. Events stay in the receipt and can be decoded with generated event descriptors.
+
+### Observation and read consistency
+
+`submit` sends once and returns signed evidence with a read-only `wait` method:
+
+```ts
+const pending = await bob.submit([
+  Counter.v0_1.get.call({ address, gasLimit }),
+]);
+const result = await pending.wait({ timeoutMs: 30_000 });
+// If this wait stops, retain pending and call pending.wait(...) again.
+```
+
+`call` combines submission and observation. Its `timeoutMs` bounds submission after signing; `wait` supplies separate receipt options. `signal` cancels the operation. Cancellation during preparation or signing prevents later dispatch once that work returns. It cannot undo a broadcast. Deployment uses the SDK's default transaction expiry; calls can override `expiryBlocks`.
+
+Each helper operation reserves a distinct transaction nonce before asynchronous preparation. Parallel calls, including aliases of one account, do not reuse a reservation within the scenario. Failed and uncertain operations consume their reservations. Reservations start from a random value in each scenario and are not a persistent account sequence. Application ordering remains explicit: await a write before starting work that depends on it. Direct `actor.wallet` operations keep ordinary SDK behavior and are outside this reservation scope.
+
+`scenario.confirmedHeight` tracks the highest committed height learned by helpers across all actors, including commitment evidence from a stopped receipt wait. `scenario.view` requests at least that height, combined with an optional `minStateBlockHeight`. It retries only the SDK's typed stale-snapshot error, with a default 30-second timeout and 50 ms polling interval. Override these with `timeoutMs` and `pollingIntervalMs`. Reads capture the dependency height when they start; they do not wait for concurrent writes that have not been observed yet. For direct SDK writes or another scenario's receipts, pass the required height explicitly.
+
+SDK execution errors retain their receipts. A decode failure after successful execution also retains its receipt and signed evidence; it is not permission to repeat the write. Both advance the confirmed-height requirement. A submission or observation failure raises `TransactionObservationError` with the original signed evidence and cause. Use `scenario.observe(error.submission)` to inspect that transaction without sending it again. The result is an SDK execution result; use `decodeExecution` with the original calls if typed values are needed. No helper retries writes.
 
 ## API
 
@@ -161,16 +221,16 @@ Cancellation does not undo a submitted transaction. Retain its original evidence
 | ---------------------------------- | ----------------------------------------------- | --------------------------------------- |
 | Existing network                   | Pinned SDK cluster connection                   | Included                                |
 | Scenario and caller                | Async scope, named actors, SDK wallets          | Included; supplied pubkey accounts      |
-| Typed remote methods               | Existing generated descriptors and wallet calls | Included; explicit SDK operations       |
+| Typed remote methods               | Existing generated descriptors and wallet calls | Included; typed actor helpers           |
 | Local node and fixture allocations | Managed network adapter                         | Included; Linux CLI-backed nodes        |
-| Deployment and consistent reads    | Small helpers over SDK operations               | GH-611                                  |
+| Deployment and consistent reads    | Small helpers over SDK operations               | Included                                |
 | Retained submission evidence       | SDK evidence hook and errors                    | Included; durable run reports in GH-612 |
 | Concurrent agents, mailbox, RNG    | Async functions and explicit coordination       | GH-610                                  |
 | Manual block production            | Supported local supervisor controls             | GH-615                                  |
 | Offline mode and virtual clock     | Add when a concrete consumer needs them         | Deferred                                |
 | Calls by name                      | Existing generated bindings first               | Deferred                                |
 
-Seeded inputs do not guarantee deterministic network scheduling. Agent time and chain time are separate. Deployment helpers and manual blocks remain separate work items.
+Seeded inputs do not guarantee deterministic network scheduling. Agent time and chain time are separate. Manual block controls remain a separate work item.
 
 ## Verify
 
@@ -186,7 +246,7 @@ npm run test:integration
 
 The package check installs the testkit tarball outside the checkout with the published SDK, checks strict consumer types, loads ESM and CommonJS exports, and tests signal cleanup in child processes. Unit tests cover lifecycle failures and deterministic accounts. Managed-process tests run on Linux; other platforms reject managed startup clearly. Attached scenarios use the SDK on supported Node.js platforms.
 
-The integration command runs the same transfer workflow as a `node:test` test and as a standalone script. It also starts two managed fixtures and checks genesis funding, signed transfers, network mismatch rejection, isolation, and attached-node ownership. To run only packed managed-node checks, use `npm run test:package -- --managed` after building.
+The integration command runs transfer and typed-deployment workflows as `node:test` tests and standalone scripts. It also checks concurrent managed fixtures, genesis funding, network mismatch rejection, isolation, and attached-node ownership. The deployment workflow checks cross-actor writes, fresh reads, events, contract aborts, and repeat observation. The counter artifact and CLI-generated binding are checked-in test fixtures; their source and hash are recorded in `tests/fixtures/provenance.json`. To run only packed managed-node checks, use `npm run test:package -- --managed` after building.
 
 Live tests require Linux, the CLI version in `scripts/integration-versions.json`, and the native libraries required by that version's devnode. Install the pinned CLI with `cargo install thruput@<version> --locked`, or provide an installed matching CLI through `THRUPUT_CLI`. The harness acquires the pinned devnode in a temporary cache, validates the serving CLI and wire version, and cleans up its processes. It preserves logs after failure. Set `THRUPUT_INTEGRATION_LOG_DIR` to keep diagnostics at a chosen path.
 

@@ -10,9 +10,16 @@ import {
   type SubmissionEvidence,
   type Transport,
 } from "@thruputchain/client";
+import {
+  createOperations,
+  type ActorOperations,
+  type ScenarioOperations,
+} from "./operations.js";
 
 /** A named account and its ordinary SDK wallet. */
-export interface Actor<TCluster extends Cluster = Cluster> {
+export interface Actor<
+  TCluster extends Cluster = Cluster,
+> extends ActorOperations {
   readonly name: string;
   readonly account: PubkeyAccount;
   readonly wallet: ExecutableWalletClient<
@@ -45,7 +52,7 @@ export interface ScenarioOptions<
 export interface Scenario<
   TCluster extends Cluster = Cluster,
   TName extends string = string,
-> {
+> extends ScenarioOperations {
   readonly client: ConnectedThruputClient<TCluster>;
   /** Aborted when closed or when the configured network signal is aborted. */
   readonly signal: AbortSignal;
@@ -121,25 +128,36 @@ export async function createScenario<
     signal.throwIfAborted();
     const actors = new Map<TName, Actor<TCluster>>();
     const onSigned = options.onSigned;
+    const operations = createOperations(client, signal);
     for (const [name, account] of accounts) {
+      const wallet = createWalletClient({
+        client,
+        account,
+        onSigned: onSigned
+          ? (submission) => onSigned(name, submission)
+          : undefined,
+      });
       actors.set(
         name,
         Object.freeze({
           name,
           account,
-          wallet: createWalletClient({
-            client,
-            account,
-            onSigned: onSigned
-              ? (submission) => onSigned(name, submission)
-              : undefined,
-          }),
+          wallet,
+          ...operations.actor(
+            wallet,
+            onSigned ? (submission) => onSigned(name, submission) : undefined,
+          ),
         }),
       );
     }
     return Object.freeze({
       client,
       signal,
+      get confirmedHeight() {
+        return operations.reads.confirmedHeight;
+      },
+      observe: operations.reads.observe,
+      view: operations.reads.view,
       actor(name: TName) {
         signal.throwIfAborted();
         const actor = actors.get(name);
