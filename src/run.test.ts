@@ -65,6 +65,7 @@ it("persists intent and restricted evidence before dispatch, with public snapsho
     const report = await inspectRun(join(root, "run"));
     expect(report.steps).toEqual([{ name: "query", state: "completed" }]);
     expect(report.attempts[0]!.state).toBe("committed");
+    expect(report.attempts[0]!.outcome).toBe("succeeded");
     expect(report.attempts[0]!.receipt).toMatchObject({
       blockHeight: observed.receipt.blockHeight.toString(),
     });
@@ -109,8 +110,10 @@ it("reconciles a committed transaction whose response was lost without another s
     const before = await inspectRun(join(root, "run"));
     expect(before.steps[0]!.state).toBe("failed");
     expect(before.attempts[0]!.state).toBe("signed");
+    expect(before.attempts[0]!.outcome).toBe("unknown");
     const result = await reconcileRun(join(root, "run"), scenario.client);
     expect(result.observations[0]!.receipt).not.toBeNull();
+    expect(result.observations[0]!.outcome).toBe("succeeded");
     expect(sends).toBe(1);
     expect(await inspectRun(join(root, "run"))).toEqual(before);
     // Model interruption after the evidence rename but before the public update.
@@ -127,7 +130,7 @@ it("reconciles a committed transaction whose response was lost without another s
   }
 });
 
-it("keeps unsigned intent and signed-but-undispatched attempts unresolved", async () => {
+it("retains signed-but-undispatched evidence and rejects corruption", async () => {
   const scenario = await createScenario({
     ...config(),
     onSigned: () => {
@@ -141,6 +144,7 @@ it("keeps unsigned intent and signed-but-undispatched attempts unresolved", asyn
     const result = await reconcileRun(join(root, "run"), scenario.client);
     expect(result.observations[0]!.receipt).toBeNull();
     expect(result.observations[0]!.status).toEqual({ status: "unknown" });
+    expect(result.observations[0]!.outcome).toBe("not-submitted");
     expect(JSON.stringify(result.report)).not.toContain(
       "secret must not reach report",
     );
@@ -152,6 +156,101 @@ it("keeps unsigned intent and signed-but-undispatched attempts unresolved", asyn
     await expect(
       reconcileRun(join(root, "run"), scenario.client),
     ).rejects.toThrow("Invalid signed run evidence");
+  } finally {
+    await scenario.close();
+  }
+});
+
+it("persists copied metadata before execution and isolates concurrent step context", async () => {
+  const scenario = await createScenario(config());
+  const metadata = { label: "Read counter", details: { amount: "125" } };
+  try {
+    await Promise.all(
+      ["first", "second"].map((name) =>
+        scenario.run.step(
+          name,
+          async () => {
+            const saved = await inspectRun(join(root, "run"));
+            expect(
+              saved.steps.find((step) => step.name === name)?.metadata,
+            ).toEqual(metadata);
+            const pending = await scenario.actor("alice").submit([call]);
+            await scenario.observe(pending.submission);
+          },
+          { metadata },
+        ),
+      ),
+    );
+    metadata.details.amount = "999";
+    const report = scenario.run.report();
+    expect(
+      report.steps.every(
+        (step) =>
+          (step.metadata?.details as { amount: string }).amount === "125",
+      ),
+    ).toBe(true);
+    expect(report.attempts.map((attempt) => attempt.step).sort()).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(
+      report.attempts.every((attempt) => attempt.outcome === "succeeded"),
+    ).toBe(true);
+  } finally {
+    await scenario.close();
+  }
+});
+
+it("rejects invalid metadata before invoking the action or reserving the step name", async () => {
+  const scenario = await createScenario(config());
+  const action = vi.fn(async () => {});
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  try {
+    for (const value of [
+      1n,
+      undefined,
+      NaN,
+      new Uint8Array(32),
+      new Date(),
+      cyclic,
+    ]) {
+      await expect(
+        scenario.run.step("invalid", action, {
+          metadata: { value } as never,
+        }),
+      ).rejects.toThrow("JSON values");
+    }
+    expect(action).not.toHaveBeenCalled();
+    expect(scenario.run.report().steps).toEqual([]);
+    await scenario.run.step("invalid", action, {
+      metadata: { value: "valid" },
+    });
+  } finally {
+    await scenario.close();
+  }
+});
+
+it("keeps successful transaction outcomes when the surrounding step fails", async () => {
+  const scenario = await createScenario(config());
+  try {
+    await expect(
+      scenario.run.step("check", async () => {
+        const pending = await scenario.actor("alice").submit([call]);
+        await scenario.observe(pending.submission);
+        throw new Error("application assertion failed");
+      }),
+    ).rejects.toThrow("application assertion failed");
+    const report = await inspectRun(join(root, "run"));
+    expect(report.steps[0]!.state).toBe("failed");
+    expect(report.attempts[0]!.outcome).toBe("succeeded");
+    // Older v1 reports without summaries remain readable and reconcilable.
+    delete report.attempts[0]!.outcome;
+    await writeFile(join(root, "run", "report.json"), JSON.stringify(report));
+    expect(
+      (await reconcileRun(join(root, "run"), scenario.client)).observations[0]!
+        .outcome,
+    ).toBe("succeeded");
   } finally {
     await scenario.close();
   }

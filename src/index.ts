@@ -29,8 +29,11 @@ export type {
   SubmittedCalls,
 } from "./operations.js";
 export { inspectRun, reconcileRun, RunPersistenceError } from "./run.js";
+export { summarizeTransaction } from "./outcomes.js";
+export type { TransactionOutcome, TransactionSummary } from "./outcomes.js";
 export type {
   ScenarioRun,
+  RunStepOptions,
   RunReport,
   RunAttempt,
   RunObservation,

@@ -16,6 +16,8 @@ import {
   type LocalScenarioOptions,
   inspectRun,
   reconcileRun,
+  summarizeTransaction,
+  type TransactionOutcome,
 } from "@thruputchain/testkit";
 import { Counter } from "./fixtures/counter.js";
 
@@ -54,7 +56,15 @@ async function checkTypes() {
     const stepValue: number = await scenario.run.step(
       "typed-step",
       async () => 42,
+      { metadata: { label: "Check count", expected: "42" } },
     );
+    await scenario.run.step("invalid-metadata", async () => {}, {
+      // @ts-expect-error Metadata is JSON, so amounts must be strings instead of bigint.
+      metadata: { amount: 42n },
+    });
+    const outcome: TransactionOutcome = summarizeTransaction({
+      error: new Error("timeout"),
+    }).outcome;
     const report = scenario.run.report();
     const runId: string = report.id;
     const previous = await inspectRun("prior-run");

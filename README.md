@@ -105,6 +105,20 @@ The hash above is the default local network identity. For another network, use i
 
 Example 5 needs only `THRUPUT_RPC_URL` and `RUN_DIRECTORY`. Keep the original chain available. It reads saved evidence, checks transaction status and receipts, and leaves the report unchanged.
 
+Steps accept optional public JSON metadata:
+
+```ts
+await scenario.run.step(
+  "deploy-counter",
+  () => alice.deploy(deployment, options),
+  {
+    metadata: { label: "Deploy counter", environment: "local" },
+  },
+);
+```
+
+Metadata is copied and saved before the callback. Each recorded attempt has an `outcome`: `succeeded`, `failed`, `not-submitted`, or `unknown`. A failed step can contain a successful transaction. `reconcileRun` returns the latest known outcome in each observation without changing the saved report. Older reports may omit attempt outcomes. Use `summarizeTransaction({ receipt })` or `summarizeTransaction({ error })` to get the same outcome and hash from SDK evidence, including faucet errors. An unknown outcome never authorizes another submission.
+
 ### Important behavior
 
 - **Funding is explicit.** Supply local allocations or fund attached accounts before their operations. Contract storage funding is separate from gas budgets.

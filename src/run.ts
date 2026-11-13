@@ -14,6 +14,12 @@ import {
   type TransactionStatus,
 } from "@thruputchain/client";
 import type { ActorOperations } from "./operations.js";
+import {
+  RunPersistenceError,
+  summarizeTransaction,
+  type TransactionOutcome,
+} from "./outcomes.js";
+export { RunPersistenceError } from "./outcomes.js";
 
 /** JSON report value. Bigints use decimal strings; receipt bytes use 0x-prefixed hex. */
 export type ReportValue =
@@ -51,6 +57,13 @@ export interface RunAttempt {
   receipt?: ReportValue;
   /** The operation threw. Its transaction can still have committed. */
   stopped?: boolean;
+  /** Execution summary. Absent in reports written by earlier versions. */
+  outcome?: TransactionOutcome;
+}
+
+/** Optional caller-supplied public context. Never include signing material. */
+export interface RunStepOptions {
+  metadata?: { [key: string]: ReportValue };
 }
 /** Public run snapshot, with base58 identities and no signer secrets or signed bytes. */
 export interface RunReport {
@@ -59,7 +72,11 @@ export interface RunReport {
   createdAt: string;
   networkHash: string;
   actors: Record<string, string>;
-  steps: { name: string; state: "running" | "completed" | "failed" }[];
+  steps: {
+    name: string;
+    state: "running" | "completed" | "failed";
+    metadata?: { [key: string]: ReportValue };
+  }[];
   attempts: RunAttempt[];
 }
 /**
@@ -78,27 +95,51 @@ export interface ScenarioRun {
   /**
    * Names are unique within a run. Results pass through without being persisted.
    * Await all work in the callback. A failed step does not prove transaction failure.
+   * Optional metadata is copied and saved before the callback. Use plain JSON
+   * values; metadata is public and must not contain secrets. A step can contain
+   * zero, one, or several transaction attempts, each with its own outcome.
    *
    * @example
    * ```ts
-   * const result = await scenario.run.step("deploy-counter", () =>
-   *   alice.deploy(deployment, { amount: 50_000_000n }),
+   * const result = await scenario.run.step("deploy-counter",
+   *   () => alice.deploy(deployment, { amount: 50_000_000n }),
+   *   { metadata: { label: "Deploy counter", environment: "local" } },
    * );
    * console.log(result.address);
    * ```
    */
-  step<T>(name: string, action: () => Promise<T>): Promise<T>;
+  step<T>(
+    name: string,
+    action: () => Promise<T>,
+    options?: RunStepOptions,
+  ): Promise<T>;
 }
-/** A persistence failure can follow commitment. Inspect the retained evidence. */
-export class RunPersistenceError extends Error {
-  constructor(
-    cause: unknown,
-    readonly submission?: SubmissionEvidence,
-    readonly receipt?: TransactionReceipt,
-  ) {
-    super("Could not persist run evidence", { cause });
-    this.name = "RunPersistenceError";
+function copyMetadata(metadata: NonNullable<RunStepOptions["metadata"]>) {
+  const ancestors = new Set<object>();
+  function validate(value: unknown): void {
+    if (
+      value === null ||
+      typeof value === "string" ||
+      typeof value === "boolean"
+    )
+      return;
+    if (typeof value === "number" && Number.isFinite(value)) return;
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      ancestors.has(value) ||
+      (!Array.isArray(value) &&
+        Object.getPrototypeOf(value) !== Object.prototype &&
+        Object.getPrototypeOf(value) !== null)
+    ) {
+      throw new TypeError("Step metadata must contain only JSON values");
+    }
+    ancestors.add(value);
+    for (const entry of Object.values(value)) validate(entry);
+    ancestors.delete(value);
   }
+  validate(metadata);
+  return structuredClone(metadata);
 }
 
 async function atomicJson(
@@ -179,6 +220,7 @@ export async function createRun(
       operation,
       intent,
       state: "intent",
+      outcome: "unknown",
       ...(context.getStore()?.step ? { step: context.getStore()!.step } : {}),
     };
     report.attempts.push(attempt);
@@ -197,6 +239,10 @@ export async function createRun(
         return await action();
       } catch (error) {
         attempt.stopped = true;
+        const summary = summarizeTransaction({ error });
+        if (attempt.outcome === "unknown") attempt.outcome = summary.outcome;
+        if (summary.transactionHash)
+          attempt.transactionHash = summary.transactionHash;
         try {
           await persist();
         } catch (failure) {
@@ -248,6 +294,7 @@ export async function createRun(
     if (!attempt) return;
     attempt.state = "committed";
     attempt.receipt = reportValue(receipt);
+    attempt.outcome = summarizeTransaction({ receipt }).outcome;
     try {
       await persist();
     } catch (error) {
@@ -258,14 +305,24 @@ export async function createRun(
     id: report.id,
     ...(directory ? { directory } : {}),
     report: () => structuredClone(report),
-    async step<T>(name: string, action: () => Promise<T>) {
+    async step<T>(
+      name: string,
+      action: () => Promise<T>,
+      options?: RunStepOptions,
+    ) {
       if (
         !name ||
         name.trim() !== name ||
         report.steps.some((step) => step.name === name)
       )
         throw new Error(`Invalid or duplicate run step: ${name}`);
-      const step: RunReport["steps"][number] = { name, state: "running" };
+      const step: RunReport["steps"][number] = {
+        name,
+        state: "running",
+        ...(options?.metadata === undefined
+          ? {}
+          : { metadata: copyMetadata(options.metadata) }),
+      };
       report.steps.push(step);
       await persist();
       return context.run({ step: name }, async () => {
@@ -368,6 +425,8 @@ export interface RunObservation {
   readonly transactionHash?: string;
   readonly status: TransactionStatus | null;
   readonly receipt: TransactionReceipt | null;
+  /** Latest known execution outcome; the original report remains unchanged. */
+  readonly outcome: TransactionOutcome;
   /** An observation error never proves transaction failure. */
   readonly error?: unknown;
 }
@@ -387,7 +446,7 @@ export interface RunObservation {
  *
  * const result = await reconcileRun("./runs/deployment", client);
  * for (const observation of result.observations) {
- *   console.log(observation.transactionHash, observation.receipt, observation.error);
+ *   console.log(observation.transactionHash, observation.outcome);
  * }
  * ```
  */
@@ -431,6 +490,7 @@ export async function reconcileRun(
           attemptId: attempt.id,
           status: null,
           receipt: null,
+          outcome: attempt.outcome ?? "unknown",
           ...(attempt.state === "intent"
             ? {}
             : { error: new Error("Signed evidence is missing") }),
@@ -476,6 +536,9 @@ export async function reconcileRun(
           transactionHash: hash,
           status,
           receipt,
+          outcome: receipt
+            ? summarizeTransaction({ receipt }).outcome
+            : (attempt.outcome ?? "unknown"),
         });
       } catch (error) {
         observations.push({
@@ -484,6 +547,7 @@ export async function reconcileRun(
           status,
           receipt,
           error,
+          outcome: attempt.outcome ?? "unknown",
         });
       }
     }
