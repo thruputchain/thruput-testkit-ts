@@ -2,7 +2,9 @@
 
 Build integration tests, seed local applications, and run deployment scripts with `@thruputchain/testkit`.
 
-Testkit starts isolated local nodes or connects to existing networks. It provides named actors, typed contract operations, coordinated async agents, and durable transaction reports. It uses the public Thruput SDK for wallets, signing, generated bindings, and RPC.
+Testkit is a Node.js harness for scripting and testing Thruput applications. It starts isolated local nodes or connects to existing networks, then provides named actors with funding, typed contract operations, durable transaction reports with signed evidence, and reconciliation. It loads contract artifacts from disk.
+
+Use `@thruputchain/client` for everything an application does with the chain. Use testkit for the parts that need Node.js: processes, the filesystem, and resumable multi-step runs.
 
 Use the SDK directly for individual reads and transactions. Use testkit when your workflow needs repeatable setup, multiple actors, confirmed-state reads, or recovery after interruption.
 
@@ -18,7 +20,7 @@ npm run build
 npm run example:transfer
 ```
 
-To use it in another project, run `npm pack` and install the resulting tarball. `@thruputchain/client` is a peer dependency: testkit uses your project's client, version 0.25 or 0.26, so your app and testkit share one SDK copy.
+To use it in another project, run `npm pack` and install the resulting tarball. `@thruputchain/client` is a peer dependency: testkit uses your project's client, so your app and testkit share one SDK copy. Testkit requires the client release that includes `summarizeTransaction`. Until that release, install the client from a local tarball.
 
 Managed local nodes require Linux, `ps` from procps, and Thruput CLI **0.45.0** on PATH:
 
@@ -78,15 +80,14 @@ Actors expose `deploy`, `call`, and `submit`, plus their ordinary SDK `wallet`. 
 
 Build once with `npm run build`, then run any of the following from the repository root. The commands use the included `tsx` development dependency.
 
-| Example                                               | Command                     | Demonstrates                                                  |
-| ----------------------------------------------------- | --------------------------- | ------------------------------------------------------------- |
-| [Local transfer](examples/01-local-transfer.ts)       | `npm run example:transfer`  | Fund actors, transfer tokens, and check balances.             |
-| [Deploy counter](examples/02-deploy-counter.ts)       | `npm run example:counter`   | Deploy, initialize, call, decode events, and read state.      |
-| [Concurrent agents](examples/03-concurrent-agents.ts) | `npm run example:agents`    | Coordinate users with messages, a barrier, and seeded inputs. |
-| [Deployment run](examples/04-deployment-run.ts)       | `npm run example:deploy`    | Use a supplied signer and save a durable deployment report.   |
-| [Reconcile run](examples/05-reconcile-run.ts)         | `npm run example:reconcile` | Inspect original transactions without submitting again.       |
+| Example                                         | Command                     | Demonstrates                                                |
+| ----------------------------------------------- | --------------------------- | ----------------------------------------------------------- |
+| [Local transfer](examples/01-local-transfer.ts) | `npm run example:transfer`  | Fund actors, transfer tokens, and check balances.           |
+| [Deploy counter](examples/02-deploy-counter.ts) | `npm run example:counter`   | Deploy, initialize, call, decode events, and read state.    |
+| [Deployment run](examples/03-deployment-run.ts) | `npm run example:deploy`    | Use a supplied signer and save a durable deployment report. |
+| [Reconcile run](examples/04-reconcile-run.ts)   | `npm run example:reconcile` | Inspect original transactions without submitting again.     |
 
-The first three start and close their own nodes. The last two connect to an existing node and leave it running.
+The first two start and close their own nodes. The last two connect to an existing node and leave it running.
 
 ### Deployment and recovery
 
@@ -117,7 +118,7 @@ await scenario.run.step(
 );
 ```
 
-Metadata is copied and saved before the callback. Each recorded attempt has an `outcome`: `succeeded`, `failed`, `not-submitted`, or `unknown`. A failed step can contain a successful transaction. `reconcileRun` returns the latest known outcome in each observation without changing the saved report. Older reports may omit attempt outcomes. Use `summarizeTransaction({ receipt })` or `summarizeTransaction({ error })` to get the same outcome and hash from SDK evidence, including faucet errors. An unknown outcome never authorizes another submission.
+Metadata is copied and saved before the callback. Each recorded attempt has an `outcome`: `succeeded`, `failed`, `not-submitted`, or `unknown`. A failed step can contain a successful transaction. `reconcileRun` returns the latest known outcome in each observation without changing the saved report. Older reports may omit attempt outcomes. Report outcomes use the client's `summarizeTransaction`. Call it directly for evidence outside a report, such as a faucet error. An unknown outcome never authorizes another submission.
 
 ### Important behavior
 

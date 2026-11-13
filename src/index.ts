@@ -1,11 +1,4 @@
 /** Node.js application scenarios built on the public Thruput client. @module */
-export { AgentError, AgentGroupError } from "./agents.js";
-export type {
-  AgentRandom,
-  AgentContext,
-  AgentDefinition,
-  AgentOptions,
-} from "./agents.js";
 export { createScenario, withScenario } from "./scenario.js";
 export type { Actor, Scenario, ScenarioOptions } from "./scenario.js";
 export {
@@ -29,8 +22,6 @@ export type {
   SubmittedCalls,
 } from "./operations.js";
 export { inspectRun, reconcileRun, RunPersistenceError } from "./run.js";
-export { summarizeTransaction } from "./outcomes.js";
-export type { TransactionOutcome, TransactionSummary } from "./outcomes.js";
 export type {
   ScenarioRun,
   RunStepOptions,

@@ -36,17 +36,16 @@
     "test:integration": "npm run build && node scripts/run-integration.mjs",
     "example:transfer": "tsx examples/01-local-transfer.ts",
     "example:counter": "tsx examples/02-deploy-counter.ts",
-    "example:agents": "tsx examples/03-concurrent-agents.ts",
-    "example:deploy": "tsx examples/04-deployment-run.ts",
-    "example:reconcile": "tsx examples/05-reconcile-run.ts",
+    "example:deploy": "tsx examples/03-deployment-run.ts",
+    "example:reconcile": "tsx examples/04-reconcile-run.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
   "peerDependencies": {
-    "@thruputchain/client": "^0.25.0 || ^0.26.0"
+    "@thruputchain/client": "^0.26.0"
   },
   "devDependencies": {
-    "@thruputchain/client": "0.26.0",
+    "@thruputchain/client": "file:.local-packages/thruputchain-client-0.26.0.tgz",
     "@thruputchain/contract-spec": "0.20.0",
     "@thruputchain/protocol": "0.20.0",
     "@types/node": "25.9.1",

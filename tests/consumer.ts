@@ -5,6 +5,7 @@ import {
   localnet,
   mainnet,
   type ContractCall,
+  type TransactionOutcome,
 } from "@thruputchain/client";
 import { ERC20 } from "@thruputchain/client/contracts";
 import { NATIVE_TOKEN_ADDRESS } from "@thruputchain/protocol";
@@ -16,8 +17,6 @@ import {
   type LocalScenarioOptions,
   inspectRun,
   reconcileRun,
-  summarizeTransaction,
-  type TransactionOutcome,
 } from "@thruputchain/testkit";
 import { Counter } from "./fixtures/counter.js";
 
@@ -30,29 +29,12 @@ async function checkTypes() {
   const options = { network: { cluster: localnet() }, accounts: { alice } };
   const value: bigint = await withScenario(options, async (scenario) => {
     const actor = scenario.actor("alice");
-    await scenario.agents<{ count: bigint }>(
-      [
-        {
-          name: "alice",
-          async run(ctx) {
-            ctx.send("alice", { count: 1n });
-            const count: bigint = (await ctx.receive()).value.count;
-            // @ts-expect-error Message payloads retain their declared type.
-            ctx.send("alice", { count: "1" });
-            // @ts-expect-error Recipients must name configured actors.
-            ctx.send("bob", { count });
-            const value: bigint = (
-              await ctx.view(
-                Counter.v0_1.get.viewRequest({
-                  address: ctx.actor.account.address,
-                }),
-              )
-            ).value;
-          },
-        },
-      ],
-      { seed: "types" },
-    );
+    // Generated view results retain their decoded type.
+    const count: bigint = (
+      await scenario.view(
+        Counter.v0_1.get.viewRequest({ address: actor.account.address }),
+      )
+    ).value;
     const stepValue: number = await scenario.run.step(
       "typed-step",
       async () => 42,
@@ -62,10 +44,9 @@ async function checkTypes() {
       // @ts-expect-error Metadata is JSON, so amounts must be strings instead of bigint.
       metadata: { amount: 42n },
     });
-    const outcome: TransactionOutcome = summarizeTransaction({
-      error: new Error("timeout"),
-    }).outcome;
     const report = scenario.run.report();
+    // Report outcomes use the client's classification.
+    const outcome: TransactionOutcome | undefined = report.attempts[0]?.outcome;
     const runId: string = report.id;
     const previous = await inspectRun("prior-run");
     const reconciled = await reconcileRun("prior-run", scenario.client);

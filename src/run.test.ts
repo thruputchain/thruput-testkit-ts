@@ -8,11 +8,19 @@ import {
   localnet,
   MockTransport,
   gasAmount,
+  TransactionObservationError,
   type Transport,
   type SubmissionEvidence,
+  type TransactionReceipt,
 } from "@thruputchain/client";
 import { Counter } from "../tests/fixtures/counter.js";
-import { createScenario, inspectRun, reconcileRun } from "./index.js";
+import {
+  createScenario,
+  inspectRun,
+  reconcileRun,
+  RunPersistenceError,
+} from "./index.js";
+import { summarizeError } from "./run.js";
 
 let root: string;
 beforeEach(async () => {
@@ -254,4 +262,44 @@ it("keeps successful transaction outcomes when the surrounding step fails", asyn
   } finally {
     await scenario.close();
   }
+});
+
+it("classifies persistence failures by their retained evidence", () => {
+  const submission = {
+    transactionHash: new Uint8Array(32).fill(1),
+    networkHash: new Uint8Array(32),
+    signedTransaction: new Uint8Array([1]),
+  };
+  const receipt: TransactionReceipt = {
+    transactionHash: submission.transactionHash,
+    blockHeight: 7n,
+    execution: { result: "return", returnData: new Uint8Array() },
+    events: [],
+    gasUsed: 10n,
+  };
+  const failure = new Error("disk full");
+  // A receipt shows execution even though the report write failed.
+  expect(
+    summarizeError(new RunPersistenceError(failure, submission, receipt)),
+  ).toEqual({ outcome: "succeeded", transactionHash: receipt.transactionHash });
+  // Signed bytes without a receipt do not establish an outcome.
+  expect(summarizeError(new RunPersistenceError(failure, submission))).toEqual({
+    outcome: "unknown",
+    transactionHash: submission.transactionHash,
+  });
+  expect(summarizeError(new RunPersistenceError(failure))).toEqual({
+    outcome: "unknown",
+  });
+  // Client errors use the client's classification.
+  expect(
+    summarizeError(
+      new TransactionObservationError(
+        submission,
+        failure,
+        undefined,
+        undefined,
+        "beforeSubmission",
+      ),
+    ).outcome,
+  ).toBe("not-submitted");
 });

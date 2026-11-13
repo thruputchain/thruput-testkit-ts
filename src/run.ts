@@ -6,20 +6,39 @@ import {
   bytesEqual,
   createSubmissionEvidence,
   fixedFromBase58,
+  summarizeTransaction,
   toBase58,
   type Cluster,
   type ConnectedThruputClient,
   type SubmissionEvidence,
+  type TransactionOutcome,
   type TransactionReceipt,
   type TransactionStatus,
+  type TransactionSummary,
 } from "@thruputchain/client";
 import type { ActorOperations } from "./operations.js";
-import {
-  RunPersistenceError,
-  summarizeTransaction,
-  type TransactionOutcome,
-} from "./outcomes.js";
-export { RunPersistenceError } from "./outcomes.js";
+
+/** A persistence failure can follow commitment. Inspect the retained evidence. */
+export class RunPersistenceError extends Error {
+  constructor(
+    cause: unknown,
+    readonly submission?: SubmissionEvidence,
+    readonly receipt?: TransactionReceipt,
+  ) {
+    super("Could not persist run evidence", { cause });
+    this.name = "RunPersistenceError";
+  }
+}
+
+/** The client classifies its own errors; this adds testkit's persistence error. */
+export function summarizeError(error: unknown): TransactionSummary {
+  if (!(error instanceof RunPersistenceError))
+    return summarizeTransaction({ error });
+  if (error.receipt) return summarizeTransaction({ receipt: error.receipt });
+  return error.submission
+    ? { outcome: "unknown", transactionHash: error.submission.transactionHash }
+    : { outcome: "unknown" };
+}
 
 /** JSON report value. Bigints use decimal strings; receipt bytes use 0x-prefixed hex. */
 export type ReportValue =
@@ -239,10 +258,10 @@ export async function createRun(
         return await action();
       } catch (error) {
         attempt.stopped = true;
-        const summary = summarizeTransaction({ error });
+        const summary = summarizeError(error);
         if (attempt.outcome === "unknown") attempt.outcome = summary.outcome;
         if (summary.transactionHash)
-          attempt.transactionHash = summary.transactionHash;
+          attempt.transactionHash = toBase58(summary.transactionHash);
         try {
           await persist();
         } catch (failure) {

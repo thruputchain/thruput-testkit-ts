@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -44,16 +44,20 @@ try {
     ),
   );
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+  // Check a supported peer version, or the development client by default.
+  const client =
+    process.env.THRUPUT_CLIENT_VERSION ??
+    pkg.devDependencies["@thruputchain/client"];
   await writeFile(
     join(work, "package.json"),
     JSON.stringify({
       private: true,
       type: "module",
       dependencies: {
-        // Check each supported peer version, for example 0.25.0 and 0.26.0.
-        "@thruputchain/client":
-          process.env.THRUPUT_CLIENT_VERSION ??
-          pkg.devDependencies["@thruputchain/client"],
+        // A local tarball path is relative to this checkout, not the consumer.
+        "@thruputchain/client": client.startsWith("file:")
+          ? `file:${resolve(root, client.slice(5))}`
+          : client,
         "@thruputchain/testkit": `file:./${testkit.filename}`,
         "@thruputchain/protocol": pkg.devDependencies["@thruputchain/protocol"],
         "@thruputchain/contract-spec":
@@ -120,7 +124,6 @@ try {
       "managed.test.mjs",
       "operations.test.mjs",
       "run.test.mjs",
-      "agents.test.mjs",
       "examples.test.mjs",
     ]);
     await run(process.execPath, ["operations-script.mjs"]);

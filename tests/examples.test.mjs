@@ -36,11 +36,7 @@ test(
   "standalone local examples run against the installed package",
   { timeout: 450_000 },
   async () => {
-    for (const name of [
-      "01-local-transfer",
-      "02-deploy-counter",
-      "03-concurrent-agents",
-    ]) {
+    for (const name of ["01-local-transfer", "02-deploy-counter"]) {
       const { stdout } = await example(name);
       assert.ok(stdout.trim(), `${name} reports its result`);
     }
@@ -78,7 +74,7 @@ test(
             THRUPUT_SIGNER_FILE: signerFile,
             RUN_DIRECTORY: join(directory, "success"),
           };
-          await example("04-deployment-run", env);
+          await example("03-deployment-run", env);
           const report = await inspectRun(env.RUN_DIRECTORY);
           assert.equal(report.attempts[0].state, "committed");
           assert.equal(report.steps[0].state, "completed");
@@ -86,7 +82,7 @@ test(
             join(env.RUN_DIRECTORY, "report.json"),
             "utf8",
           );
-          await example("05-reconcile-run", {
+          await example("04-reconcile-run", {
             ...env,
             THRUPUT_SIGNER_FILE: "",
           });
@@ -94,7 +90,7 @@ test(
             await readFile(join(env.RUN_DIRECTORY, "report.json"), "utf8"),
             before,
           );
-          await assert.rejects(example("04-deployment-run", env), /EEXIST/);
+          await assert.rejects(example("03-deployment-run", env), /EEXIST/);
 
           // Forward the write, then lose its response. The example must not resend.
           let sends = 0;
@@ -126,7 +122,7 @@ test(
           try {
             const runDirectory = join(directory, "lost-response");
             await assert.rejects(
-              example("04-deployment-run", {
+              example("03-deployment-run", {
                 ...env,
                 RUN_DIRECTORY: runDirectory,
                 THRUPUT_RPC_URL: `http://127.0.0.1:${proxy.address().port}`,
@@ -135,7 +131,7 @@ test(
             assert.equal(sends, 1);
             const unresolved = await inspectRun(runDirectory);
             assert.equal(unresolved.attempts[0].state, "signed");
-            const { stdout } = await example("05-reconcile-run", {
+            const { stdout } = await example("04-reconcile-run", {
               ...env,
               RUN_DIRECTORY: runDirectory,
               THRUPUT_SIGNER_FILE: "",
