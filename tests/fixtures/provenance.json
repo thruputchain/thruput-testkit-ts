@@ -3,6 +3,6 @@
   "sha256": "a30a03b40c243f94478169ba9a2f8e4367e1ec0d5a043971a5f6238c6f12f6e2",
   "source": "https://github.com/thruputchain/thruput-sdk-ts/blob/181e14555f13226f64fc522862d146fe8e91128a/examples/fixtures/counter.rv32a",
   "license": "Apache-2.0",
-  "bindings": "thruput 0.44.0 codegen ts counter.rv32a -o counter.ts",
+  "bindings": "thruput 0.45.0 codegen ts counter.rv32a -o counter.ts",
   "qualification": "Test fixture only. Inherited upstream build provenance is incomplete; this is not a release-qualified application artifact."
 }

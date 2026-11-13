@@ -15,7 +15,7 @@ vi.mock("./scenario.js", () => ({
     actor: (name: string) => ({ account: options.accounts[name] }),
     client: {
       getVersionInfo: async () => ({
-        implementation: "0.44.0",
+        implementation: "0.45.0",
         wireFormat: "14.4.0",
       }),
     },
@@ -39,7 +39,7 @@ async function config(mode = "ready") {
 const {writeFileSync} = require('node:fs');
 const {spawn} = require('node:child_process');
 const {createServer} = require('node:http');
-if (process.argv.includes('--version')) { console.log('thruput 0.44.0'); process.exit(0); }
+if (process.argv.includes('--version')) { console.log('thruput 0.45.0'); process.exit(0); }
 if (process.argv.includes('install')) process.exit(0);
 const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>{}); setInterval(()=>{},1000)'], {stdio:'ignore'});
 writeFileSync('pids.json', JSON.stringify([process.pid, child.pid]));

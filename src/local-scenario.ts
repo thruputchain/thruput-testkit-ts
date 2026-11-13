@@ -21,8 +21,8 @@ import {
 
 /** Runtime combination qualified by this testkit release. */
 export const LOCAL_RUNTIME = Object.freeze({
-  cli: "0.44.0",
-  devnode: "0.1.32",
+  cli: "0.45.0",
+  devnode: "0.1.33",
   wireFormat: "14.4.0",
 });
 type LocalCluster = ReturnType<typeof localnet>;

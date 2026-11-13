@@ -20,13 +20,13 @@ npm run example:transfer
 
 To use it in another project, run `npm pack` and install the resulting tarball. `@thruputchain/client` is a peer dependency: testkit uses your project's client, version 0.25 or 0.26, so your app and testkit share one SDK copy.
 
-Managed local nodes require Linux, `ps` from procps, and Thruput CLI **0.44.0** on PATH:
+Managed local nodes require Linux, `ps` from procps, and Thruput CLI **0.45.0** on PATH:
 
 ```sh
-cargo install thruput@0.44.0 --locked
+cargo install thruput@0.45.0 --locked
 ```
 
-The CLI downloads devnode **0.1.32**, so startup requires download access and the devnode's native runtime libraries. The tested Linux runtime includes glibc, libstdc++, libgcc, libatomic, jemalloc, Snappy, zlib, bzip2, LZ4, Zstandard, OpenSSL 3, and Brotli. Connecting to an existing network does not require a local CLI or devnode.
+The CLI downloads devnode **0.1.33**, so startup requires download access and the devnode's native runtime libraries. The tested Linux runtime includes glibc, libstdc++, libgcc, libatomic, jemalloc, Snappy, zlib, bzip2, LZ4, Zstandard, OpenSSL 3, and Brotli. Connecting to an existing network does not require a local CLI or devnode.
 
 ## A local scenario
 
