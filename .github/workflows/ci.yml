@@ -35,6 +35,9 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run test:package
+      - run: npm run test:package
+        env:
+          THRUPUT_CLIENT_VERSION: 0.25.0
 
   floor:
     runs-on: ubuntu-latest
@@ -46,11 +49,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.12.0
-      - run: npm ci --omit=dev
-      - run: npm run test:smoke
+      # Install as a consumer would, with the oldest supported Node and client peer.
+      - name: Smoke test minimum versions
+        run: |
+          mkdir "$RUNNER_TEMP/consumer"
+          cp tests/consumer-smoke.mjs "$RUNNER_TEMP/consumer/"
+          cd "$RUNNER_TEMP/consumer"
+          echo '{"private":true,"type":"module"}' > package.json
+          npm install --no-audit --no-fund "$RUNNER_TEMP"/thruputchain-testkit-*.tgz @thruputchain/client@0.25.0
+          node consumer-smoke.mjs
 
   # Enable explicitly after this repository has access to the runtime runner.
   # Ordinary pull requests use hosted runners and never need node binaries.

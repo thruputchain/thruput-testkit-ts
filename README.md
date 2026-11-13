@@ -18,7 +18,7 @@ npm run build
 npm run example:transfer
 ```
 
-To use it in another project, run `npm pack` and install the resulting tarball alongside `@thruputchain/client@0.26.0`.
+To use it in another project, run `npm pack` and install the resulting tarball. `@thruputchain/client` is a peer dependency: testkit uses your project's client, version 0.25 or 0.26, so your app and testkit share one SDK copy.
 
 Managed local nodes require Linux, `ps` from procps, and Thruput CLI **0.44.0** on PATH:
 

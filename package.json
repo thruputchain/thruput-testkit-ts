@@ -42,10 +42,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
-  "dependencies": {
-    "@thruputchain/client": "^0.26.0"
+  "peerDependencies": {
+    "@thruputchain/client": "^0.25.0 || ^0.26.0"
   },
   "devDependencies": {
+    "@thruputchain/client": "0.26.0",
     "@thruputchain/contract-spec": "0.20.0",
     "@thruputchain/protocol": "0.20.0",
     "@types/node": "25.9.1",

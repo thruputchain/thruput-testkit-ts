@@ -50,7 +50,10 @@ try {
       private: true,
       type: "module",
       dependencies: {
-        "@thruputchain/client": pkg.dependencies["@thruputchain/client"],
+        // Check each supported peer version, for example 0.25.0 and 0.26.0.
+        "@thruputchain/client":
+          process.env.THRUPUT_CLIENT_VERSION ??
+          pkg.devDependencies["@thruputchain/client"],
         "@thruputchain/testkit": `file:./${testkit.filename}`,
         "@thruputchain/protocol": pkg.devDependencies["@thruputchain/protocol"],
         "@thruputchain/contract-spec":
