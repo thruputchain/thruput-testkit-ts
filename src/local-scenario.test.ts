@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  checkCliVersion,
   createLocalScenario,
   withLocalScenario,
   LOCAL_RUNTIME,
@@ -31,7 +32,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function config(mode = "ready") {
+async function config(mode = "ready", version = "0.45.0") {
   const cli = join(root, `cli-${mode}`);
   await writeFile(
     cli,
@@ -39,7 +40,7 @@ async function config(mode = "ready") {
 const {writeFileSync} = require('node:fs');
 const {spawn} = require('node:child_process');
 const {createServer} = require('node:http');
-if (process.argv.includes('--version')) { console.log('thruput 0.45.0'); process.exit(0); }
+if (process.argv.includes('--version')) { console.log('thruput ${version}'); process.exit(0); }
 if (process.argv.includes('install')) process.exit(0);
 const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>{}); setInterval(()=>{},1000)'], {stdio:'ignore'});
 writeFileSync('pids.json', JSON.stringify([process.pid, child.pid]));
@@ -194,10 +195,57 @@ it.skipIf(process.platform !== "linux")(
     });
     await expect(createLocalScenario(options)).rejects.toMatchObject({
       cause: expect.objectContaining({
-        message: expect.stringContaining("Expected Thruput CLI"),
+        message: expect.stringContaining("older than the qualified"),
       }),
     });
   },
+);
+
+it("accepts the qualified CLI or newer, and rejects older versions", () => {
+  expect(checkCliVersion("thruput 0.45.0 (commit unavailable)\n")).toEqual({
+    version: "0.45.0",
+    qualified: true,
+  });
+  // Patch releases are qualified; newer minor and major versions are not.
+  expect(checkCliVersion("thruput 0.45.3").qualified).toBe(true);
+  expect(checkCliVersion("thruput 0.46.0").qualified).toBe(false);
+  expect(checkCliVersion("thruput 1.0.0").qualified).toBe(false);
+  expect(() => checkCliVersion("thruput 0.44.9")).toThrow(
+    "older than the qualified 0.45.0",
+  );
+  expect(() => checkCliVersion("hogd 0.45.0")).toThrow("Unrecognized");
+});
+
+it.skipIf(process.platform !== "linux")(
+  "starts with a newer CLI and emits a warning",
+  async () => {
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const close = vi.fn(async () => {});
+    vi.mocked(createScenario).mockImplementationOnce(async (options) => ({
+      ...({} as Awaited<ReturnType<typeof createScenario>>),
+      signal: options.network.signal!,
+      client: {
+        getVersionInfo: async () => ({
+          implementation: "0.46.0",
+          wireFormat: LOCAL_RUNTIME.wireFormat,
+        }),
+      } as unknown as Awaited<ReturnType<typeof createScenario>>["client"],
+      close,
+    }));
+    try {
+      const scenario = await createLocalScenario(
+        await config("ready", "0.46.0"),
+      );
+      await scenario.close();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("0.46.0 is newer than the qualified 0.45.0"),
+        { code: "THRUPUT_TESTKIT_UNQUALIFIED_CLI" },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  },
+  15000,
 );
 
 it.skipIf(process.platform !== "linux")(

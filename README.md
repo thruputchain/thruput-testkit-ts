@@ -22,13 +22,13 @@ npm run example:transfer
 
 To use it in another project, run `npm pack` and install the resulting tarball. `@thruputchain/client` is a peer dependency: testkit uses your project's client, so your app and testkit share one SDK copy. Testkit requires the client release that includes `summarizeTransaction`. Until that release, install the client from a local tarball.
 
-Managed local nodes require Linux, `ps` from procps, and Thruput CLI **0.45.0** on PATH:
+Managed local nodes require Linux, `ps` from procps, and Thruput CLI **0.45.0** or newer on PATH:
 
 ```sh
 cargo install thruput@0.45.0 --locked
 ```
 
-The CLI downloads devnode **0.1.33**, so startup requires download access and the devnode's native runtime libraries. The tested Linux runtime includes glibc, libstdc++, libgcc, libatomic, jemalloc, Snappy, zlib, bzip2, LZ4, Zstandard, OpenSSL 3, and Brotli. Connecting to an existing network does not require a local CLI or devnode.
+Testkit is qualified with CLI 0.45.0. A newer minor or major CLI version runs with a Node.js warning (`THRUPUT_TESTKIT_UNQUALIFIED_CLI`); an older one is rejected. The devnode and wire format stay exact: the CLI downloads devnode **0.1.33**, so startup requires download access and the devnode's native runtime libraries. The tested Linux runtime includes glibc, libstdc++, libgcc, libatomic, jemalloc, Snappy, zlib, bzip2, LZ4, Zstandard, OpenSSL 3, and Brotli. Connecting to an existing network does not require a local CLI or devnode.
 
 ## A local scenario
 
@@ -74,7 +74,39 @@ await withLocalScenario(
 
 This example also needs `@thruputchain/protocol@0.20.0`, included in this checkout. Amounts are raw native-token units. Account storage consumes part of the initial allocation. Seeded accounts are repeatable test identities for disposable nodes.
 
-Actors expose `deploy`, `call`, and `submit`, plus their ordinary SDK `wallet`. `scenario.view` waits for state that includes preceding confirmed helper operations. Generated bindings retain their argument and result types.
+Actors expose `deploy`, `call`, and `submit`, plus their ordinary SDK `wallet`. On networks with a faucet, `fund` requests funds once and records the request in the run report. `scenario.view` waits for state that includes preceding confirmed helper operations, including funding. Generated bindings retain their argument and result types.
+
+## Scripts against an existing network
+
+Setup and seeding scripts need accounts that outlive the script. Save each key before the account is funded or used, so a failed run can be recovered:
+
+```ts
+import { join } from "node:path";
+import { devnet } from "@thruputchain/client";
+import {
+  createKeyFile,
+  createOutputDirectory,
+  withScenario,
+} from "@thruputchain/testkit";
+
+const directory = await createOutputDirectory(".local/setup");
+const deployer = await createKeyFile(join(directory, "key.json"));
+
+await withScenario(
+  {
+    network: { cluster: devnet({ networkHash: expectedNetworkHash }) },
+    accounts: { deployer: deployer.account },
+    runDirectory: join(directory, "transactions"),
+  },
+  async (scenario) => {
+    const actor = scenario.actor("deployer");
+    await scenario.run.step("fund-deployer", () => actor.fund());
+    // Deploy and verify here.
+  },
+);
+```
+
+Key files use mode 0600 and are never replaced. `loadKeyFile` restores the account and checks that the saved address matches the seed. The report holds public addresses and hashes; it never contains seeds.
 
 ## Runnable examples
 
@@ -118,14 +150,14 @@ await scenario.run.step(
 );
 ```
 
-Metadata is copied and saved before the callback. Each recorded attempt has an `outcome`: `succeeded`, `failed`, `not-submitted`, or `unknown`. A failed step can contain a successful transaction. `reconcileRun` returns the latest known outcome in each observation without changing the saved report. Older reports may omit attempt outcomes. Report outcomes use the client's `summarizeTransaction`. Call it directly for evidence outside a report, such as a faucet error. An unknown outcome never authorizes another submission.
+Metadata is copied and saved before the callback. Each recorded attempt has an `outcome`: `succeeded`, `failed`, `not-submitted`, or `unknown`. A failed step can contain a successful transaction. `reconcileRun` returns the latest known outcome in each observation without changing the saved report. Older reports may omit attempt outcomes. Report outcomes use the client's `summarizeTransaction`. Call it directly for evidence outside a report. An unknown outcome never authorizes another submission.
 
 ### Important behavior
 
-- **Funding is explicit.** Supply local allocations or fund attached accounts before their operations. Contract storage funding is separate from gas budgets.
+- **Funding is explicit.** Supply local allocations, or call `actor.fund` on a network with a faucet. Contract storage funding is separate from gas budgets.
 - **Network identity is explicit.** Attached scenarios require an expected network hash and validate it before signing.
 - **Node ownership is explicit.** `withLocalScenario` closes its node; `withScenario` leaves the external node running.
-- **Writes are not retried.** A timeout can follow commitment. Retain the original signed evidence and use `scenario.observe` or `reconcileRun` to inspect it before deciding what to do next. Faucet requests have separate SDK evidence and are not captured by the wallet signing hook.
+- **Writes are not retried.** A timeout can follow commitment. Retain the original signed evidence and use `scenario.observe` or `reconcileRun` to inspect it before deciding what to do next. Faucet requests from `actor.fund` are recorded by hash and reconciled by hash; the run does not sign them.
 
 The counter artifact is an Apache-2.0 test fixture, not a release-qualified application artifact. Its [source and SHA-256](tests/fixtures/provenance.json) are recorded with the test fixtures. The matching TypeScript binding is generated; do not edit it by hand.
 

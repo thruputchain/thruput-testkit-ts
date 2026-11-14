@@ -3,6 +3,7 @@ import {
   createWalletClient,
   HttpTransport,
   type Cluster,
+  type ClusterHasCapability,
   type ClusterThruputClientOptions,
   type ConnectedThruputClient,
   type ExecutableWalletClient,
@@ -14,12 +15,13 @@ import {
 import { createRun, type ScenarioRun } from "./run.js";
 import {
   createOperations,
+  type ActorFundOperations,
   type ActorOperations,
   type ScenarioOperations,
 } from "./operations.js";
 
 /** A named account and its ordinary SDK wallet. */
-export interface Actor<
+export interface ActorBase<
   TCluster extends Cluster = Cluster,
 > extends ActorOperations {
   readonly name: string;
@@ -29,6 +31,11 @@ export interface Actor<
     PubkeyAccount
   >;
 }
+/** A scenario actor. `fund` is available when the cluster declares a faucet. */
+export type Actor<TCluster extends Cluster = Cluster> = ActorBase<TCluster> &
+  (ClusterHasCapability<TCluster, "airdrop"> extends true
+    ? ActorFundOperations
+    : object);
 
 /** Configuration for attaching a scenario to an existing network. */
 export interface ScenarioOptions<
@@ -156,6 +163,7 @@ export async function createScenario<
         await onSigned?.(name, submission);
       };
       const wallet = createWalletClient({ client, account, onSigned: signed });
+      // fund exists at runtime and checks the network; the type follows the cluster.
       actors.set(
         name,
         Object.freeze({
@@ -163,7 +171,7 @@ export async function createScenario<
           account,
           wallet,
           ...recorder.track(name, operations.actor(wallet, signed)),
-        }),
+        }) as Actor<TCluster>,
       );
     }
     return Object.freeze({

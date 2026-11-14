@@ -10,12 +10,15 @@ import {
   decodeDeployment,
   decodeExecution,
   defaultWalletAdapter,
+  FundingObservationError,
   gasAmount,
   NativeRpcError,
   serializeSignedTransaction,
   TransactionObservationError,
   TransactionReceiptObservationError,
   walletGasLimit,
+  type AirdropActions,
+  type AirdropSucceeded,
   type CallResults,
   type Cluster,
   type ConnectedThruputClient,
@@ -73,6 +76,21 @@ export interface SubmittedCalls<TCalls extends readonly ContractCall[]> {
   wait(
     options?: ObserveOptions,
   ): Promise<ExecutionResult & { values: CallResults<TCalls> }>;
+}
+/** Faucet request controls. The faucet chooses the amount. */
+export interface FundOptions {
+  /** Covers the request and its receipt; defaults to 60 seconds. */
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+}
+/** Faucet funding, available on networks with the airdrop capability. */
+export interface ActorFundOperations {
+  /**
+   * Request faucet funds for this actor once, and wait for successful execution.
+   * The run report records the request and its hash. An uncertain request is
+   * never repeated: a FundingObservationError retains the known hash.
+   */
+  fund(options?: FundOptions): Promise<AirdropSucceeded>;
 }
 /** Typed helpers over SDK transactions and generated contract descriptors. */
 export interface ActorOperations {
@@ -145,6 +163,9 @@ export function createOperations(
 ) {
   let nextNonce = randomBytes(8).readBigUInt64BE();
   let confirmedHeight = 0n;
+  function confirm(height: bigint) {
+    if (height > confirmedHeight) confirmedHeight = height;
+  }
   function reserve(): bigint {
     signal.throwIfAborted();
     if (nextNonce > 0xffffffffffffffffn)
@@ -182,11 +203,9 @@ export function createOperations(
     } catch (error) {
       if (
         error instanceof TransactionReceiptObservationError &&
-        error.knownCommitment &&
-        error.knownCommitment.blockHeight > confirmedHeight
-      ) {
-        confirmedHeight = error.knownCommitment.blockHeight;
-      }
+        error.knownCommitment
+      )
+        confirm(error.knownCommitment.blockHeight);
       throw new TransactionObservationError(
         submission,
         error,
@@ -197,8 +216,7 @@ export function createOperations(
         "observation",
       );
     }
-    if (receipt.blockHeight > confirmedHeight)
-      confirmedHeight = receipt.blockHeight;
+    confirm(receipt.blockHeight);
     await onReceipt?.(receipt, submission);
     assertTransactionSuccess(receipt, submission);
     return { transactionHash: submission.transactionHash, receipt, submission };
@@ -285,7 +303,7 @@ export function createOperations(
   function actor(
     wallet: WalletActions<PubkeyAccount>,
     onSigned?: (evidence: SubmissionEvidence) => void | Promise<void>,
-  ): ActorOperations {
+  ): ActorOperations & ActorFundOperations {
     function waiting(options: CallOptions): ObserveOptions {
       const wait = options.wait ?? {};
       if (wait.timeoutMs !== undefined)
@@ -398,6 +416,32 @@ export function createOperations(
       });
     }
     return {
+      async fund(options = {}) {
+        const control = scoped(options.signal);
+        control.throwIfAborted();
+        if (!("requestAirdrop" in client))
+          throw new Error(
+            "Scenario network has no faucet. Use a cluster with the airdrop capability.",
+          );
+        const faucet = client as typeof client & AirdropActions;
+        try {
+          const result = await faucet.requestAirdrop({
+            recipient: wallet.account.address,
+            expectedNetworkHash: client.network.networkHash,
+            signal: control,
+            ...(options.timeoutMs === undefined
+              ? {}
+              : { timeoutMs: duration(options.timeoutMs, "timeoutMs") }),
+          });
+          confirm(result.blockHeight);
+          return result;
+        } catch (error) {
+          // Later reads must include a funding transaction that is known to be committed.
+          if (error instanceof FundingObservationError && error.knownCommitment)
+            confirm(error.knownCommitment.blockHeight);
+          throw error;
+        }
+      },
       submit,
       async call(calls, options = {}) {
         const wait = waiting(options);

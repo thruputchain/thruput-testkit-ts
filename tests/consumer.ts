@@ -14,6 +14,10 @@ import {
   createScenario,
   withLocalScenario,
   loadArtifacts,
+  createKeyFile,
+  createOutputDirectory,
+  loadKeyFile,
+  type KeyFile,
   type LocalScenarioOptions,
   inspectRun,
   reconcileRun,
@@ -23,9 +27,14 @@ import { Counter } from "./fixtures/counter.js";
 // Compiled against an installed tarball, never run. Negative cases protect the
 // generated-binding and capability types across the package boundary.
 async function checkTypes() {
+  const directory: string = await createOutputDirectory(".local/setup");
+  const saved: KeyFile = await createKeyFile(`${directory}/key.json`);
+  const restored = await loadKeyFile(saved.path);
   const alice = createPubkeyAccount({
     signer: Ed25519Signer.fromSeed(new Uint8Array(32).fill(1)),
   });
+  // @ts-expect-error Key file accounts are SDK pubkey accounts, not strings.
+  const wrong: string = restored.account;
   const options = { network: { cluster: localnet() }, accounts: { alice } };
   const value: bigint = await withScenario(options, async (scenario) => {
     const actor = scenario.actor("alice");
@@ -54,6 +63,7 @@ async function checkTypes() {
     // @ts-expect-error Actor names come from the configured account mapping.
     scenario.actor("bob");
     await actor.wallet.requestAirdrop();
+    const funded: bigint = (await actor.fund()).rawAmount;
     const call = ERC20.v0_1.getBalanceOf.call({
       address: NATIVE_TOKEN_ADDRESS,
       gasLimit: gasAmount(500_000n),
@@ -113,6 +123,8 @@ async function checkTypes() {
   });
   // @ts-expect-error An actor cannot acquire an undeclared faucet capability.
   await noFaucet.actor("alice").wallet.requestAirdrop();
+  // @ts-expect-error Recorded funding follows the same cluster capability.
+  await noFaucet.actor("alice").fund();
   await noFaucet.close();
   return value;
 }

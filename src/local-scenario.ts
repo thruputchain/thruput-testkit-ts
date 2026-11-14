@@ -19,13 +19,45 @@ import {
   type ScenarioOptions,
 } from "./scenario.js";
 
-/** Runtime combination qualified by this testkit release. */
+/**
+ * Runtime combination qualified by this testkit release.
+ *
+ * Testkit installs this exact devnode and requires its wire format. The CLI
+ * can be this version or newer: a newer minor or major version emits a Node.js
+ * warning, and an older version is rejected.
+ */
 export const LOCAL_RUNTIME = Object.freeze({
   cli: "0.45.0",
   devnode: "0.1.33",
   wireFormat: "14.4.0",
 });
 type LocalCluster = ReturnType<typeof localnet>;
+
+/**
+ * Accept the qualified CLI or a newer one. Patch releases are treated as
+ * qualified; newer minor or major versions run with a warning.
+ */
+export function checkCliVersion(output: string): {
+  version: string;
+  qualified: boolean;
+} {
+  const match = /^thruput (\d+)\.(\d+)\.(\d+)(?:\s|$)/.exec(output.trim());
+  if (!match)
+    throw new Error(`Unrecognized Thruput CLI version: ${output.trim()}`);
+  const version = `${match[1]}.${match[2]}.${match[3]}`;
+  const found = match.slice(1, 4).map(Number);
+  const pinned = LOCAL_RUNTIME.cli.split(".").map(Number);
+  const order =
+    found.map((value, index) => value - pinned[index]!).find(Boolean) ?? 0;
+  if (order < 0)
+    throw new Error(
+      `Thruput CLI ${version} is older than the qualified ${LOCAL_RUNTIME.cli}`,
+    );
+  return {
+    version,
+    qualified: found[0] === pinned[0] && found[1] === pinned[1],
+  };
+}
 
 /** Configuration for an isolated Linux node with explicit genesis funding. */
 export interface LocalScenarioOptions<TName extends string = string> {
@@ -71,8 +103,8 @@ export interface LocalScenario<TName extends string = string> extends Scenario<
 /**
  * Start an isolated Linux node with explicit, deterministic genesis accounts.
  *
- * Requires the CLI version in {@link LOCAL_RUNTIME} on PATH, or an explicit
- * `cli` executable. Startup checks runtime and network identity. Each scenario
+ * Requires the CLI version in {@link LOCAL_RUNTIME}, or a newer one, on PATH
+ * or as an explicit `cli` executable. Startup checks runtime and network identity. Each scenario
  * uses its own directory and ports. Close the returned scenario in `finally`,
  * or use {@link withLocalScenario} for callback-scoped cleanup.
  */
@@ -184,13 +216,11 @@ export async function createLocalScenario<TName extends string>(
   try {
     let local: LocalScenario<TName>["local"];
     try {
-      const version = await run(["--version"], "version");
-      if (
-        !version.startsWith(`thruput ${LOCAL_RUNTIME.cli} `) &&
-        version.trim() !== `thruput ${LOCAL_RUNTIME.cli}`
-      )
-        throw new Error(
-          `Expected Thruput CLI ${LOCAL_RUNTIME.cli}, received ${version.trim()}`,
+      const cliVersion = checkCliVersion(await run(["--version"], "version"));
+      if (!cliVersion.qualified)
+        process.emitWarning(
+          `Thruput CLI ${cliVersion.version} is newer than the qualified ${LOCAL_RUNTIME.cli}`,
+          { code: "THRUPUT_TESTKIT_UNQUALIFIED_CLI" },
         );
       await mkdir(env.XDG_CONFIG_HOME, { recursive: true });
       await writeFile(
@@ -269,11 +299,11 @@ export async function createLocalScenario<TName extends string>(
       });
       const versionInfo = await scenario.client.getVersionInfo({}, { signal });
       if (
-        versionInfo.implementation !== LOCAL_RUNTIME.cli ||
+        versionInfo.implementation !== cliVersion.version ||
         versionInfo.wireFormat !== LOCAL_RUNTIME.wireFormat
       )
         throw new Error(
-          "Serving runtime does not match the supported CLI and wire format",
+          `Serving runtime ${versionInfo.implementation} (wire ${versionInfo.wireFormat}) does not match CLI ${cliVersion.version} and wire ${LOCAL_RUNTIME.wireFormat}`,
         );
       signal.throwIfAborted();
       local = Object.freeze({

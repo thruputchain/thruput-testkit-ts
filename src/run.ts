@@ -16,7 +16,7 @@ import {
   type TransactionStatus,
   type TransactionSummary,
 } from "@thruputchain/client";
-import type { ActorOperations } from "./operations.js";
+import type { ActorFundOperations, ActorOperations } from "./operations.js";
 
 /** A persistence failure can follow commitment. Inspect the retained evidence. */
 export class RunPersistenceError extends Error {
@@ -103,8 +103,9 @@ export interface RunReport {
  *
  * A durable run writes intent and restricted signed evidence before dispatch.
  * Its directory uses mode 0700 and evidence files use 0600. Share the public
- * report rather than the whole directory. Faucet requests do not pass through
- * the wallet evidence hook and need their own SDK funding evidence.
+ * report rather than the whole directory. `actor.fund` records faucet requests
+ * with their transaction hash. The run does not sign them, so they have no
+ * signed evidence, and reconciliation observes them by hash.
  */
 export interface ScenarioRun {
   readonly id: string;
@@ -305,6 +306,18 @@ export async function createRun(
       throw new RunPersistenceError(error, submission);
     }
   }
+  async function funded(transactionHash: Uint8Array): Promise<void> {
+    const attempt = context.getStore()?.attempt;
+    if (!attempt) return;
+    attempt.state = "committed";
+    attempt.transactionHash = toBase58(transactionHash);
+    attempt.outcome = "succeeded";
+    try {
+      await persist();
+    } catch (error) {
+      throw new RunPersistenceError(error);
+    }
+  }
   async function receipt(
     receipt: TransactionReceipt,
     submission: SubmissionEvidence,
@@ -366,8 +379,23 @@ export async function createRun(
       });
     },
   });
-  function track(actor: string, operations: ActorOperations): ActorOperations {
+  function track(
+    actor: string,
+    operations: ActorOperations & ActorFundOperations,
+  ): ActorOperations & ActorFundOperations {
     return {
+      fund(options) {
+        return capture(
+          actor,
+          "fund",
+          { recipient: report.actors[actor] ?? null },
+          async () => {
+            const result = await operations.fund(options);
+            await funded(result.transactionHash);
+            return result;
+          },
+        );
+      },
       submit(calls, options) {
         return capture(
           actor,
@@ -495,6 +523,43 @@ export async function reconcileRun(
     if (!bytesEqual(expected, network.networkHash))
       throw new Error("Run network does not match the connected network");
     const observations: RunObservation[] = [];
+    // Read-only: status and receipt for an original hash. Nothing is submitted.
+    async function observe(
+      attempt: RunAttempt,
+      transactionHash: Uint8Array,
+    ): Promise<RunObservation> {
+      const hash = toBase58(transactionHash);
+      let status: TransactionStatus | null = null;
+      let receipt: TransactionReceipt | null = null;
+      try {
+        status = await client.getTransactionStatus(
+          { transactionHash },
+          { signal },
+        );
+        receipt = await client.getTransactionReceipt(
+          { transactionHash },
+          { signal },
+        );
+        return {
+          attemptId: attempt.id,
+          transactionHash: hash,
+          status,
+          receipt,
+          outcome: receipt
+            ? summarizeTransaction({ receipt }).outcome
+            : (attempt.outcome ?? "unknown"),
+        };
+      } catch (error) {
+        return {
+          attemptId: attempt.id,
+          transactionHash: hash,
+          status,
+          receipt,
+          error,
+          outcome: attempt.outcome ?? "unknown",
+        };
+      }
+    }
     for (const attempt of report.attempts) {
       signal.throwIfAborted();
       let raw: string;
@@ -505,6 +570,16 @@ export async function reconcileRun(
         );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        // Faucet transactions are not signed by the run, so only their hash exists.
+        if (attempt.operation === "fund" && attempt.transactionHash) {
+          observations.push(
+            await observe(
+              attempt,
+              fixedFromBase58(attempt.transactionHash, 32),
+            ),
+          );
+          continue;
+        }
         observations.push({
           attemptId: attempt.id,
           status: null,
@@ -539,36 +614,7 @@ export async function reconcileRun(
           "Run evidence hash does not match the recorded attempt",
         );
       // Evidence may be durable even if interruption prevented the public update.
-      let status: TransactionStatus | null = null;
-      let receipt: TransactionReceipt | null = null;
-      try {
-        status = await client.getTransactionStatus(
-          { transactionHash: evidence.transactionHash },
-          { signal },
-        );
-        receipt = await client.getTransactionReceipt(
-          { transactionHash: evidence.transactionHash },
-          { signal },
-        );
-        observations.push({
-          attemptId: attempt.id,
-          transactionHash: hash,
-          status,
-          receipt,
-          outcome: receipt
-            ? summarizeTransaction({ receipt }).outcome
-            : (attempt.outcome ?? "unknown"),
-        });
-      } catch (error) {
-        observations.push({
-          attemptId: attempt.id,
-          transactionHash: hash,
-          status,
-          receipt,
-          error,
-          outcome: attempt.outcome ?? "unknown",
-        });
-      }
+      observations.push(await observe(attempt, evidence.transactionHash));
     }
     return { report, observations };
   } finally {

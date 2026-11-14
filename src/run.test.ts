@@ -8,6 +8,8 @@ import {
   localnet,
   MockTransport,
   gasAmount,
+  FundingObservationError,
+  toBase58,
   TransactionObservationError,
   type Transport,
   type SubmissionEvidence,
@@ -21,6 +23,7 @@ import {
   RunPersistenceError,
 } from "./index.js";
 import { summarizeError } from "./run.js";
+import type { ActorFundOperations } from "./operations.js";
 
 let root: string;
 beforeEach(async () => {
@@ -302,4 +305,107 @@ it("classifies persistence failures by their retained evidence", () => {
       ),
     ).outcome,
   ).toBe("not-submitted");
+});
+
+it("records faucet funding with its hash and reconciles it without another request", async () => {
+  const mock = new MockTransport();
+  const request = vi.spyOn(mock, "request");
+  const scenario = await createScenario(config(mock));
+  try {
+    const result = await scenario.run.step("fund-alice", () =>
+      scenario.actor("alice").fund(),
+    );
+    // Later reads must include the funding transaction.
+    expect(scenario.confirmedHeight).toBe(result.blockHeight);
+    const report = await inspectRun(join(root, "run"));
+    expect(report.attempts).toEqual([
+      expect.objectContaining({
+        actor: "alice",
+        operation: "fund",
+        step: "fund-alice",
+        intent: { recipient: report.actors.alice },
+        state: "committed",
+        outcome: "succeeded",
+        transactionHash: toBase58(result.transactionHash),
+      }),
+    ]);
+    const faucetCalls = () =>
+      request.mock.calls.filter(
+        ([method]) => method === "faucet_requestAirdrop",
+      ).length;
+    expect(faucetCalls()).toBe(1);
+    const reconciled = await reconcileRun(join(root, "run"), scenario.client);
+    expect(reconciled.observations[0]).toMatchObject({
+      transactionHash: toBase58(result.transactionHash),
+      outcome: "succeeded",
+    });
+    // Reconciliation reads the original hash; it never calls the faucet again.
+    expect(
+      request.mock.calls.some(
+        ([method, params]) =>
+          method === "getTransactionStatus" &&
+          JSON.stringify(params).includes(toBase58(result.transactionHash)),
+      ),
+    ).toBe(true);
+    expect(faucetCalls()).toBe(1);
+  } finally {
+    await scenario.close();
+  }
+});
+
+it("keeps the hash of an uncertain faucet request", async () => {
+  const mock = new MockTransport();
+  const transport: Transport = {
+    async request(method, params, control) {
+      const value = await mock.request(method, params, control);
+      // The faucet accepts the request, but its receipt cannot be observed.
+      if (method === "faucet_requestAirdrop") {
+        const { recipient, rawAmount, transactionHash } = value as Record<
+          string,
+          string
+        >;
+        return {
+          attemptStatus: "pending",
+          recipient,
+          rawAmount,
+          retryAfterSeconds: "1",
+          transactionHash,
+        } as never;
+      }
+      if (method === "getTransactionReceipt") throw new Error("lost receipt");
+      return value as never;
+    },
+  };
+  const scenario = await createScenario(config(transport));
+  try {
+    await expect(
+      scenario.run.step("fund-alice", () =>
+        scenario.actor("alice").fund({ timeoutMs: 1_000 }),
+      ),
+    ).rejects.toBeInstanceOf(FundingObservationError);
+    const attempt = (await inspectRun(join(root, "run"))).attempts[0]!;
+    expect(attempt).toMatchObject({
+      operation: "fund",
+      stopped: true,
+      outcome: "unknown",
+    });
+    expect(attempt.transactionHash).toBeTruthy();
+  } finally {
+    await scenario.close();
+  }
+});
+
+it("rejects funding on a network without a faucet", async () => {
+  const cluster = { ...localnet(), capabilities: [] as const };
+  const scenario = await createScenario({
+    ...config(),
+    network: { cluster, transport: new MockTransport() },
+  });
+  try {
+    // The type hides fund here; a widened cluster still reaches the runtime check.
+    const actor = scenario.actor("alice") as unknown as ActorFundOperations;
+    await expect(actor.fund()).rejects.toThrow("no faucet");
+  } finally {
+    await scenario.close();
+  }
 });
