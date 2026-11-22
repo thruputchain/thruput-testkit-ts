@@ -8,6 +8,17 @@
     "type": "git",
     "url": "git+https://github.com/thruputchain/thruput-testkit-ts.git"
   },
+  "homepage": "https://github.com/thruputchain/thruput-testkit-ts#readme",
+  "bugs": {
+    "url": "https://github.com/thruputchain/thruput-testkit-ts/issues"
+  },
+  "keywords": [
+    "thruput",
+    "blockchain",
+    "testing",
+    "integration-tests",
+    "sdk"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

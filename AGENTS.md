@@ -10,7 +10,7 @@
 - Dependencies install anonymously from the public npm registry.
 - Run `npm run format:check`, `npm run typecheck`, `npm test`, `npm run build`, and `npm run test:package` before review.
 - `test:package` installs a tarball outside the checkout with the published SDK. It checks strict consumer types and ESM/CommonJS behavior. Build first.
-- `npm run test:integration` uses Linux and the exact CLI/devnode pins in `scripts/integration-versions.json`. It starts an isolated test node and runs the same packed-package workflow as a test and a standalone script.
+- `npm run test:integration` uses Linux and the exact CLI/devnode pins in `scripts/integration-versions.json`. Managed nodes at runtime accept that CLI or a newer one, with the devnode the CLI selects. It starts an isolated test node and runs the same packed-package workflow as a test and a standalone script.
 - Use `THRUPUT_RPC_URL=... npm run test:package -- --live` to check a node that is already running. This local smoke creates fresh accounts and requests faucet funds.
 
 ## Structure
@@ -35,6 +35,6 @@ The integration harness was adapted from the SDK harness. It is internal qualifi
 
 ## Review and release
 
-GH-608 tracks the workstream. GH-612, GH-610, and GH-616 are complete and committed; GH-615 is blocked on a supported external manual-block control interface. GH-614's generated API documentation is approved for implementation. Use TypeDoc with source comments and generated output in docs/api/; do not add custom documentation files. Consumer migration and publication require separate approval.
+Keep documentation in README.md, source TSDoc, and the generated API reference (docs/api/). Do not add hand-written guides. RELEASING.md describes publication.
 
 Commit, push, publish, or create a remote repository only when requested. Live CI is opt-in and requires this repository to have access to the configured runtime runner.
