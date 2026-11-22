@@ -18,6 +18,7 @@ import {
   type SubmissionEvidence,
   type Transport,
 } from "@thruputchain/client";
+import { ContractType } from "@thruputchain/protocol";
 import { Counter } from "../tests/fixtures/counter.js";
 import { createScenario, withScenario, SCENARIO_GAS } from "./index.js";
 
@@ -321,6 +322,32 @@ it("validates wait controls before signing and honors an explicit root gas budge
         deserializeSignedTransaction(signed[0]!.signedTransaction).tx.invocation
           .gas_limit,
       ).toBe(2_000_000n);
+    },
+  );
+});
+
+it("attaches contract code for factory calls", async () => {
+  const f = fixture();
+  const signed: SubmissionEvidence[] = [];
+  const code = {
+    contract_type: ContractType.kRv32 as const,
+    rv32_contract: { data: new Uint8Array([1, 2, 3]) },
+  };
+  await withScenario(
+    {
+      ...f.options,
+      onSigned: (_, value) => {
+        signed.push(value);
+      },
+    },
+    async (scenario) => {
+      await scenario
+        .actor("alice")
+        .call([f.call], { contractsToDeploy: [code] });
+      expect(
+        deserializeSignedTransaction(signed[0]!.signedTransaction).tx
+          .contracts_to_deploy,
+      ).toEqual([code]);
     },
   );
 });

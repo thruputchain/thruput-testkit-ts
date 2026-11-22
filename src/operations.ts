@@ -24,6 +24,7 @@ import {
   type ConnectedThruputClient,
   type ContractAddress,
   type ContractCall,
+  type PrepareTransactionRequest,
   type ContractDeployment,
   type ContractView,
   type ContractViewRequest,
@@ -54,6 +55,11 @@ export interface SubmitOptions {
   readonly gasLimit?: GasAmount;
   /** Optional transaction expiry window, in blocks. */
   readonly expiryBlocks?: bigint;
+  /**
+   * Contract code attached to the transaction, so a factory call can deploy it.
+   * The node keeps attached code only when the transaction deploys an instance.
+   */
+  readonly contractsToDeploy?: PrepareTransactionRequest["contractsToDeploy"];
   /** Bounds submission after signing; defaults to 30 seconds. */
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
@@ -63,7 +69,10 @@ export interface CallOptions extends SubmitOptions {
   readonly wait?: ObserveOptions;
 }
 /** Atomic deployment controls. The default root budget is SCENARIO_GAS.deployment. */
-export interface DeployOptions extends Omit<CallOptions, "expiryBlocks"> {
+export interface DeployOptions extends Omit<
+  CallOptions,
+  "expiryBlocks" | "contractsToDeploy"
+> {
   /** Exact raw native-token storage allocation. Zero explicitly skips funding. */
   readonly amount: bigint;
   /** Ordinary generated call to the prepared address, executed atomically. */
@@ -395,6 +404,7 @@ export function createOperations(
             invocation,
             nonce,
             expiryBlocks: options.expiryBlocks,
+            contractsToDeploy: options.contractsToDeploy,
           }),
         nonce,
         options,
