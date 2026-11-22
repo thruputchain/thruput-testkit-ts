@@ -5,7 +5,6 @@ import {
   localnet,
   mainnet,
   type ContractCall,
-  type TransactionOutcome,
 } from "@thruputchain/client";
 import { ERC20 } from "@thruputchain/client/contracts";
 import { NATIVE_TOKEN_ADDRESS } from "@thruputchain/protocol";
@@ -18,6 +17,7 @@ import {
   createOutputDirectory,
   loadKeyFile,
   type KeyFile,
+  type RunOutcome,
   type LocalScenarioOptions,
   inspectRun,
   reconcileRun,
@@ -55,7 +55,7 @@ async function checkTypes() {
     });
     const report = scenario.run.report();
     // Report outcomes use the client's classification.
-    const outcome: TransactionOutcome | undefined = report.attempts[0]?.outcome;
+    const outcome: RunOutcome | undefined = report.attempts[0]?.outcome;
     const runId: string = report.id;
     const previous = await inspectRun("prior-run");
     const reconciled = await reconcileRun("prior-run", scenario.client);

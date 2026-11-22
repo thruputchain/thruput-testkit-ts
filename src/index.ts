@@ -39,3 +39,4 @@ export type {
   RunObservation,
   ReportValue,
 } from "./run.js";
+export type { RunOutcome } from "./outcomes.js";

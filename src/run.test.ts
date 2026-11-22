@@ -155,7 +155,7 @@ it("retains signed-but-undispatched evidence and rejects corruption", async () =
     const result = await reconcileRun(join(root, "run"), scenario.client);
     expect(result.observations[0]!.receipt).toBeNull();
     expect(result.observations[0]!.status).toEqual({ status: "unknown" });
-    expect(result.observations[0]!.outcome).toBe("not-submitted");
+    expect(result.observations[0]!.outcome).toBe("notSubmitted");
     expect(JSON.stringify(result.report)).not.toContain(
       "secret must not reach report",
     );
@@ -304,7 +304,7 @@ it("classifies persistence failures by their retained evidence", () => {
         "beforeSubmission",
       ),
     ).outcome,
-  ).toBe("not-submitted");
+  ).toBe("notSubmitted");
 });
 
 it("records faucet funding with its hash and reconciles it without another request", async () => {

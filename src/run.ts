@@ -6,17 +6,20 @@ import {
   bytesEqual,
   createSubmissionEvidence,
   fixedFromBase58,
-  summarizeTransaction,
   toBase58,
   type Cluster,
   type ConnectedThruputClient,
   type SubmissionEvidence,
-  type TransactionOutcome,
   type TransactionReceipt,
   type TransactionStatus,
-  type TransactionSummary,
 } from "@thruputchain/client";
 import type { ActorFundOperations, ActorOperations } from "./operations.js";
+import {
+  errorOutcome,
+  receiptOutcome,
+  type OutcomeSummary,
+  type RunOutcome,
+} from "./outcomes.js";
 
 /** A persistence failure can follow commitment. Inspect the retained evidence. */
 export class RunPersistenceError extends Error {
@@ -30,11 +33,14 @@ export class RunPersistenceError extends Error {
   }
 }
 
-/** The client classifies its own errors; this adds testkit's persistence error. */
-export function summarizeError(error: unknown): TransactionSummary {
-  if (!(error instanceof RunPersistenceError))
-    return summarizeTransaction({ error });
-  if (error.receipt) return summarizeTransaction({ receipt: error.receipt });
+/** Client errors, plus testkit's persistence error, which can follow commitment. */
+export function summarizeError(error: unknown): OutcomeSummary {
+  if (!(error instanceof RunPersistenceError)) return errorOutcome(error);
+  if (error.receipt)
+    return {
+      outcome: receiptOutcome(error.receipt),
+      transactionHash: error.receipt.transactionHash,
+    };
   return error.submission
     ? { outcome: "unknown", transactionHash: error.submission.transactionHash }
     : { outcome: "unknown" };
@@ -77,7 +83,7 @@ export interface RunAttempt {
   /** The operation threw. Its transaction can still have committed. */
   stopped?: boolean;
   /** Execution summary. Absent in reports written by earlier versions. */
-  outcome?: TransactionOutcome;
+  outcome?: RunOutcome;
 }
 
 /** Optional caller-supplied public context. Never include signing material. */
@@ -326,7 +332,7 @@ export async function createRun(
     if (!attempt) return;
     attempt.state = "committed";
     attempt.receipt = reportValue(receipt);
-    attempt.outcome = summarizeTransaction({ receipt }).outcome;
+    attempt.outcome = receiptOutcome(receipt);
     try {
       await persist();
     } catch (error) {
@@ -473,7 +479,7 @@ export interface RunObservation {
   readonly status: TransactionStatus | null;
   readonly receipt: TransactionReceipt | null;
   /** Latest known execution outcome; the original report remains unchanged. */
-  readonly outcome: TransactionOutcome;
+  readonly outcome: RunOutcome;
   /** An observation error never proves transaction failure. */
   readonly error?: unknown;
 }
@@ -546,7 +552,7 @@ export async function reconcileRun(
           status,
           receipt,
           outcome: receipt
-            ? summarizeTransaction({ receipt }).outcome
+            ? receiptOutcome(receipt)
             : (attempt.outcome ?? "unknown"),
         };
       } catch (error) {
