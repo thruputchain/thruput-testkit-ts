@@ -114,14 +114,15 @@ Key files use mode 0600 and are never replaced. `loadKeyFile` restores the accou
 
 Build once with `npm run build`, then run any of the following from the repository root. The commands use the included `tsx` development dependency.
 
-| Example                                         | Command                     | Demonstrates                                                |
-| ----------------------------------------------- | --------------------------- | ----------------------------------------------------------- |
-| [Local transfer](examples/01-local-transfer.ts) | `npm run example:transfer`  | Fund actors, transfer tokens, and check balances.           |
-| [Deploy counter](examples/02-deploy-counter.ts) | `npm run example:counter`   | Deploy, initialize, call, decode events, and read state.    |
-| [Deployment run](examples/03-deployment-run.ts) | `npm run example:deploy`    | Use a supplied signer and save a durable deployment report. |
-| [Reconcile run](examples/04-reconcile-run.ts)   | `npm run example:reconcile` | Inspect original transactions without submitting again.     |
+| Example                                         | Command                     | Demonstrates                                                      |
+| ----------------------------------------------- | --------------------------- | ----------------------------------------------------------------- |
+| [Local transfer](examples/01-local-transfer.ts) | `npm run example:transfer`  | Fund actors, transfer tokens, and check balances.                 |
+| [Deploy counter](examples/02-deploy-counter.ts) | `npm run example:counter`   | Deploy, initialize, call, decode events, and read state.          |
+| [Deployment run](examples/03-deployment-run.ts) | `npm run example:deploy`    | Use a supplied signer and save a durable deployment report.       |
+| [Reconcile run](examples/04-reconcile-run.ts)   | `npm run example:reconcile` | Inspect original transactions without submitting again.           |
+| [Vitest](examples/05-vitest.test.ts)            | `npm run example:vitest`    | Share one node across Vitest tests and check an expected failure. |
 
-The first two start and close their own nodes. The last two connect to an existing node and leave it running.
+Examples 1, 2, and 5 start and close their own nodes. Examples 3 and 4 connect to an existing node and leave it running. Testkit works with any test runner; example 5 shows Vitest, and the test suite in `tests/` uses `node:test`.
 
 ### Deployment and recovery
 

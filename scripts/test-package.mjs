@@ -64,6 +64,7 @@ try {
           pkg.devDependencies["@thruputchain/contract-spec"],
         "@types/node": pkg.devDependencies["@types/node"],
         tsx: pkg.devDependencies.tsx,
+        vitest: pkg.devDependencies.vitest,
       },
     }),
   );

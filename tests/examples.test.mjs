@@ -40,6 +40,18 @@ test(
       const { stdout } = await example(name);
       assert.ok(stdout.trim(), `${name} reports its result`);
     }
+    // The Vitest example runs under Vitest, against the same installed package.
+    const vitest = await exec(
+      process.execPath,
+      [
+        "node_modules/vitest/vitest.mjs",
+        "run",
+        "--config",
+        "examples/vitest.config.ts",
+      ],
+      { timeout: 150_000, maxBuffer: 1024 * 1024 },
+    );
+    assert.match(vitest.stdout, /Tests\s+2 passed/);
   },
 );
 

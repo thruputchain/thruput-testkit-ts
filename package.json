@@ -38,6 +38,7 @@
     "example:counter": "tsx examples/02-deploy-counter.ts",
     "example:deploy": "tsx examples/03-deployment-run.ts",
     "example:reconcile": "tsx examples/04-reconcile-run.ts",
+    "example:vitest": "vitest run --config examples/vitest.config.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
