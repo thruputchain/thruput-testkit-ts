@@ -125,7 +125,7 @@ The first two start and close their own nodes. The last two connect to an existi
 
 ### Deployment and recovery
 
-For example 4, supply an already-funded account and the expected network identity:
+For example 3, supply an already-funded account and the expected network identity:
 
 ```sh
 export THRUPUT_RPC_URL=http://127.0.0.1:9545
@@ -138,7 +138,7 @@ npm run example:reconcile
 
 The hash above is the default local network identity. For another network, use its trusted expected hash. The signer file must contain a raw 32-byte Ed25519 seed; keep it private. `RUN_DIRECTORY` must be a new path inside an existing parent directory. The deployment script does not fund the account.
 
-Example 5 needs only `THRUPUT_RPC_URL` and `RUN_DIRECTORY`. Keep the original chain available. It reads saved evidence, checks transaction status and receipts, and leaves the report unchanged.
+Example 4 needs only `THRUPUT_RPC_URL` and `RUN_DIRECTORY`. Keep the original chain available. It reads saved evidence, checks transaction status and receipts, and leaves the report unchanged.
 
 Steps accept optional public JSON metadata:
 
@@ -152,7 +152,24 @@ await scenario.run.step(
 );
 ```
 
-Metadata is copied and saved before the callback. Each recorded attempt has an `outcome`: `succeeded`, `failed`, `notSubmitted`, or `unknown`. A failed step can contain a successful transaction. `reconcileRun` returns the latest known outcome in each observation without changing the saved report. Older reports may omit attempt outcomes. An unknown outcome never authorizes another submission.
+Metadata is copied and saved before the callback.
+
+### Run reports
+
+A durable run directory contains:
+
+- `report.json`: the public record. Share this file.
+- `evidence/<attempt id>.json`: signed transaction bytes, saved before dispatch. Owner-only (mode 0600). Do not share.
+
+`report.json` has these fields:
+
+- `actors`: actor names mapped to addresses.
+- `steps`: each named step, with `running`, `completed`, or `failed`, and its metadata.
+- `attempts`: each transaction, with its actor, step, `operation` (`deploy`, `call`, `submit`, `fund`, or `wallet`), hash, receipt, and `outcome`.
+
+An `outcome` is `succeeded`, `failed`, `notSubmitted`, or `unknown`. A failed step can contain a successful transaction. An unknown outcome never permits another submission. Faucet requests from `actor.fund` have a hash and an outcome, but no receipt or evidence file, because the run does not sign them.
+
+`reconcileRun` observes every attempt again, by its signed evidence or, for faucet requests, by hash. It returns the latest outcomes and does not change the report. Within `schemaVersion` 1, fields are only added, never renamed or removed. The API reference for `RunReport` and `RunAttempt` documents each field.
 
 ### Important behavior
 

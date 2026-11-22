@@ -35,6 +35,7 @@ export type {
   ScenarioRun,
   RunStepOptions,
   RunReport,
+  RunStep,
   RunAttempt,
   RunObservation,
   ReportValue,
