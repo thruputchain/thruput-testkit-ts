@@ -23,7 +23,8 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
           `#!/usr/bin/env node
 const {writeFileSync} = require('node:fs');
 const {spawn} = require('node:child_process');
-if (process.argv.includes('--version')) { console.log('thruput 0.45.0'); process.exit(0); }
+if (process.argv.includes('--version')) { console.log('thruput 0.47.0'); process.exit(0); }
+if (process.argv.includes('list')) { console.log(JSON.stringify({ok:true,command:'toolchain.list',data:{defaultVersion:'0.1.36'}})); process.exit(0); }
 if (process.argv.includes('install')) process.exit(0);
 const backend = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {stdio:'ignore'});
 writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify([process.pid, backend.pid]));

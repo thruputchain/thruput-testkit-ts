@@ -14,7 +14,7 @@ for (const kit of [esm, cjs]) {
   assert.equal(typeof kit.withLocalScenario, "function");
   assert.equal(typeof kit.loadArtifacts, "function");
   assert.equal(kit.SCENARIO_GAS.walletOverhead, 500_000n);
-  assert.equal(kit.LOCAL_RUNTIME.cli, "0.45.0");
+  assert.equal(kit.LOCAL_RUNTIME.cli, "0.47.0");
   let saved;
   const result = await kit.withScenario(
     {

@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   checkCliVersion,
+  checkWireFormat,
   createLocalScenario,
+  parseDefaultDevnode,
   withLocalScenario,
   LOCAL_RUNTIME,
 } from "./local-scenario.js";
@@ -16,8 +18,8 @@ vi.mock("./scenario.js", () => ({
     actor: (name: string) => ({ account: options.accounts[name] }),
     client: {
       getVersionInfo: async () => ({
-        implementation: "0.45.0",
-        wireFormat: "14.4.0",
+        implementation: "0.47.0",
+        wireFormat: "14.7.0",
       }),
     },
     close: async () => {},
@@ -32,7 +34,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function config(mode = "ready", version = "0.45.0") {
+async function config(mode = "ready", version = "0.47.0", devnode = "0.1.36") {
   const cli = join(root, `cli-${mode}`);
   await writeFile(
     cli,
@@ -41,7 +43,9 @@ const {writeFileSync} = require('node:fs');
 const {spawn} = require('node:child_process');
 const {createServer} = require('node:http');
 if (process.argv.includes('--version')) { console.log('thruput ${version}'); process.exit(0); }
+if (process.argv.includes('list')) { console.log(JSON.stringify({ok:true,command:'toolchain.list',data:{defaultVersion:'${devnode}'}})); process.exit(0); }
 if (process.argv.includes('install')) process.exit(0);
+writeFileSync('node-args.json', JSON.stringify(process.argv.slice(2)));
 const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>{}); setInterval(()=>{},1000)'], {stdio:'ignore'});
 writeFileSync('pids.json', JSON.stringify([process.pid, child.pid]));
 if ('${mode}' === 'fail') process.exit(1);
@@ -202,22 +206,35 @@ it.skipIf(process.platform !== "linux")(
 );
 
 it("accepts the qualified CLI or newer, and rejects older versions", () => {
-  expect(checkCliVersion("thruput 0.45.0 (commit unavailable)\n")).toEqual({
-    version: "0.45.0",
+  expect(checkCliVersion("thruput 0.47.0 (commit 61ddf183)\n")).toEqual({
+    version: "0.47.0",
     qualified: true,
   });
   // Patch releases are qualified; newer minor and major versions are not.
-  expect(checkCliVersion("thruput 0.45.3").qualified).toBe(true);
-  expect(checkCliVersion("thruput 0.46.0").qualified).toBe(false);
+  expect(checkCliVersion("thruput 0.47.3").qualified).toBe(true);
+  expect(checkCliVersion("thruput 0.48.0").qualified).toBe(false);
   expect(checkCliVersion("thruput 1.0.0").qualified).toBe(false);
-  expect(() => checkCliVersion("thruput 0.44.9")).toThrow(
-    "older than the qualified 0.45.0",
+  expect(() => checkCliVersion("thruput 0.46.9")).toThrow(
+    "older than the qualified 0.47.0",
   );
-  expect(() => checkCliVersion("hogd 0.45.0")).toThrow("Unrecognized");
+  expect(() => checkCliVersion("hogd 0.47.0")).toThrow("Unrecognized");
+});
+
+it("reads the CLI's devnode and checks the wire-format major version", () => {
+  expect(
+    parseDefaultDevnode(
+      JSON.stringify({ ok: true, data: { defaultVersion: "0.1.36" } }),
+    ),
+  ).toBe("0.1.36");
+  expect(() => parseDefaultDevnode(JSON.stringify({ ok: false }))).toThrow(
+    "default devnode",
+  );
+  expect(() => checkWireFormat("14.9.1")).not.toThrow();
+  expect(() => checkWireFormat("15.0.0")).toThrow("supports 14.x");
 });
 
 it.skipIf(process.platform !== "linux")(
-  "starts with a newer CLI and emits a warning",
+  "starts a newer CLI with its own devnode and emits a warning",
   async () => {
     const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     const close = vi.fn(async () => {});
@@ -226,19 +243,34 @@ it.skipIf(process.platform !== "linux")(
       signal: options.network.signal!,
       client: {
         getVersionInfo: async () => ({
-          implementation: "0.46.0",
-          wireFormat: LOCAL_RUNTIME.wireFormat,
+          implementation: "0.48.0",
+          wireFormat: "14.8.0",
         }),
       } as unknown as Awaited<ReturnType<typeof createScenario>>["client"],
       close,
     }));
     try {
       const scenario = await createLocalScenario(
-        await config("ready", "0.46.0"),
+        await config("ready", "0.48.0", "0.1.37"),
       );
       await scenario.close();
+      expect(scenario.local.runtime).toEqual({
+        cli: "0.48.0",
+        devnode: "0.1.37",
+        wireFormat: "14.8.0",
+      });
+      // The node runs the CLI's own devnode, not the qualified one.
+      const args: string[] = JSON.parse(
+        await readFile(
+          join(scenario.local.directory, "node-args.json"),
+          "utf8",
+        ),
+      );
+      expect(args[args.indexOf("--hog-devnode-version") + 1]).toBe("0.1.37");
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("0.46.0 is newer than the qualified 0.45.0"),
+        expect.stringContaining(
+          "CLI 0.48.0 with devnode 0.1.37 is not the qualified",
+        ),
         { code: "THRUPUT_TESTKIT_UNQUALIFIED_CLI" },
       );
     } finally {

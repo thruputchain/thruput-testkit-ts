@@ -20,15 +20,17 @@ npm run build
 npm run example:transfer
 ```
 
-To use it in another project, run `npm pack` and install the resulting tarball. `@thruputchain/client` is a peer dependency: testkit uses your project's client, so your app and testkit share one SDK copy. Testkit requires the client release that includes `summarizeTransaction`. Until that release, install the client from a local tarball.
+To use it in another project, run `npm pack` and install the resulting tarball. `@thruputchain/client` 0.28 is a peer dependency: testkit uses your project's client, so your app and testkit share one SDK copy.
 
-Managed local nodes require Linux, `ps` from procps, and Thruput CLI **0.45.0** or newer on PATH:
+Managed local nodes require Linux, `ps` from procps, and Thruput CLI **0.47.0** or newer on PATH:
 
 ```sh
-cargo install thruput@0.45.0 --locked
+cargo install thruput@0.47.0 --locked
 ```
 
-Testkit is qualified with CLI 0.45.0. A newer minor or major CLI version runs with a Node.js warning (`THRUPUT_TESTKIT_UNQUALIFIED_CLI`); an older one is rejected. The devnode and wire format stay exact: the CLI downloads devnode **0.1.33**, so startup requires download access and the devnode's native runtime libraries. The tested Linux runtime includes glibc, libstdc++, libgcc, libatomic, jemalloc, Snappy, zlib, bzip2, LZ4, Zstandard, OpenSSL 3, and Brotli. Connecting to an existing network does not require a local CLI or devnode.
+Testkit is qualified with CLI 0.47.0, devnode 0.1.36, and wire format 14.7. Each CLI runs only its own compatible devnode, so testkit uses the devnode that your CLI selects. A newer CLI, or another devnode, runs with a Node.js warning (`THRUPUT_TESTKIT_UNQUALIFIED_CLI`). An older CLI, or a node with another wire-format major version, is rejected. `scenario.local.runtime` reports the versions in use.
+
+The CLI downloads its devnode once into its normal toolchain cache, so the first startup requires download access. Each node otherwise uses its own private configuration and data directory. The devnode needs native runtime libraries. The tested Linux runtime includes glibc, libstdc++, libgcc, libatomic, jemalloc, Snappy, zlib, bzip2, LZ4, Zstandard, OpenSSL 3, and Brotli. Connecting to an existing network does not require a local CLI or devnode.
 
 ## A local scenario
 
@@ -150,7 +152,7 @@ await scenario.run.step(
 );
 ```
 
-Metadata is copied and saved before the callback. Each recorded attempt has an `outcome`: `succeeded`, `failed`, `not-submitted`, or `unknown`. A failed step can contain a successful transaction. `reconcileRun` returns the latest known outcome in each observation without changing the saved report. Older reports may omit attempt outcomes. Report outcomes use the client's `summarizeTransaction`. Call it directly for evidence outside a report. An unknown outcome never authorizes another submission.
+Metadata is copied and saved before the callback. Each recorded attempt has an `outcome`: `succeeded`, `failed`, `notSubmitted`, or `unknown`. A failed step can contain a successful transaction. `reconcileRun` returns the latest known outcome in each observation without changing the saved report. Older reports may omit attempt outcomes. An unknown outcome never authorizes another submission.
 
 ### Important behavior
 
