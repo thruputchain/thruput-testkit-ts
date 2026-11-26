@@ -1,9 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  gasAmount,
-  TransactionExecutionError,
-  TransactionObservationError,
-} from "@thruputchain/client";
+import { gasAmount, isThruputError } from "@thruputchain/client";
 import { loadArtifacts, withLocalScenario } from "@thruputchain/testkit";
 import { Counter, counter } from "./generated/counter.js";
 
@@ -71,13 +67,20 @@ export async function deploymentWorkflow() {
       const count = signed.length;
       await assert.rejects(
         pending.wait({ signal: AbortSignal.abort(new Error("stop waiting")) }),
-        TransactionObservationError,
+        (error) =>
+          isThruputError(error, "transactionOutcomeUnknown") &&
+          error.transaction.reason === "cancelled" &&
+          Buffer.from(error.transaction.hash).equals(
+            Buffer.from(pending.submission.transactionHash),
+          ),
       );
       assert.equal((await pending.wait()).values[0], 47n);
       assert.equal(signed.length, count);
       await assert.rejects(
         bob.call([Counter.v0_1.error.call({ address, gasLimit })]),
-        TransactionExecutionError,
+        (error) =>
+          isThruputError(error, "transactionFailed") &&
+          error.transaction.outcome === "failed",
       );
       assert.equal(
         (await scenario.view(Counter.v0_1.get.viewRequest({ address }))).value,

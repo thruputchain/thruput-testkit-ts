@@ -2,6 +2,7 @@ import {
   createPubkeyAccount,
   Ed25519Signer,
   gasAmount,
+  isThruputError,
   localnet,
   mainnet,
   type ContractCall,
@@ -13,6 +14,11 @@ import {
   createScenario,
   withLocalScenario,
   loadArtifacts,
+  createKeyFile,
+  createOutputDirectory,
+  loadKeyFile,
+  type KeyFile,
+  type RunOutcome,
   type LocalScenarioOptions,
   inspectRun,
   reconcileRun,
@@ -22,40 +28,42 @@ import { Counter } from "./fixtures/counter.js";
 // Compiled against an installed tarball, never run. Negative cases protect the
 // generated-binding and capability types across the package boundary.
 async function checkTypes() {
+  const failure: unknown = undefined;
+  // Testkit adds its persistence code to the client error codes.
+  if (isThruputError(failure, "testkitPersistenceFailed")) {
+    const hash: Uint8Array | undefined = failure.transaction?.hash;
+  }
+  // @ts-expect-error Unknown codes stay rejected.
+  isThruputError(failure, "testkitUnknownCode");
+  const directory: string = await createOutputDirectory(".local/setup");
+  const saved: KeyFile = await createKeyFile(`${directory}/key.json`);
+  const restored = await loadKeyFile(saved.path);
   const alice = createPubkeyAccount({
     signer: Ed25519Signer.fromSeed(new Uint8Array(32).fill(1)),
   });
+  // @ts-expect-error Key file accounts are SDK pubkey accounts, not strings.
+  const wrong: string = restored.account;
   const options = { network: { cluster: localnet() }, accounts: { alice } };
   const value: bigint = await withScenario(options, async (scenario) => {
     const actor = scenario.actor("alice");
-    await scenario.agents<{ count: bigint }>(
-      [
-        {
-          name: "alice",
-          async run(ctx) {
-            ctx.send("alice", { count: 1n });
-            const count: bigint = (await ctx.receive()).value.count;
-            // @ts-expect-error Message payloads retain their declared type.
-            ctx.send("alice", { count: "1" });
-            // @ts-expect-error Recipients must name configured actors.
-            ctx.send("bob", { count });
-            const value: bigint = (
-              await ctx.view(
-                Counter.v0_1.get.viewRequest({
-                  address: ctx.actor.account.address,
-                }),
-              )
-            ).value;
-          },
-        },
-      ],
-      { seed: "types" },
-    );
+    // Generated view results retain their decoded type.
+    const count: bigint = (
+      await scenario.view(
+        Counter.v0_1.get.viewRequest({ address: actor.account.address }),
+      )
+    ).value;
     const stepValue: number = await scenario.run.step(
       "typed-step",
       async () => 42,
+      { metadata: { label: "Check count", expected: "42" } },
     );
+    await scenario.run.step("invalid-metadata", async () => {}, {
+      // @ts-expect-error Metadata is JSON, so amounts must be strings instead of bigint.
+      metadata: { amount: 42n },
+    });
     const report = scenario.run.report();
+    // Report outcomes use the client's classification.
+    const outcome: RunOutcome | undefined = report.attempts[0]?.outcome;
     const runId: string = report.id;
     const previous = await inspectRun("prior-run");
     const reconciled = await reconcileRun("prior-run", scenario.client);
@@ -63,6 +71,7 @@ async function checkTypes() {
     // @ts-expect-error Actor names come from the configured account mapping.
     scenario.actor("bob");
     await actor.wallet.requestAirdrop();
+    const funded: bigint = (await actor.fund()).rawAmount;
     const call = ERC20.v0_1.getBalanceOf.call({
       address: NATIVE_TOKEN_ADDRESS,
       gasLimit: gasAmount(500_000n),
@@ -122,6 +131,8 @@ async function checkTypes() {
   });
   // @ts-expect-error An actor cannot acquire an undeclared faucet capability.
   await noFaucet.actor("alice").wallet.requestAirdrop();
+  // @ts-expect-error Recorded funding follows the same cluster capability.
+  await noFaucet.actor("alice").fund();
   await noFaucet.close();
   return value;
 }

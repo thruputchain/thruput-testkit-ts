@@ -9,7 +9,7 @@ import {
   HttpTransport,
   localnet,
   gasAmount,
-  TransactionObservationError,
+  isThruputError,
   toBase58,
 } from "@thruputchain/client";
 import { ERC20 } from "@thruputchain/client/contracts";
@@ -58,8 +58,9 @@ test(
           });
           let failure;
           try {
+            // submit does not wait, so a lost response leaves the outcome unknown.
             await attached.run.step("transfer", () =>
-              attached.actor("alice").call([
+              attached.actor("alice").submit([
                 ERC20.v0_1.transfer.call({
                   address: NATIVE_TOKEN_ADDRESS,
                   gasLimit: gasAmount(500_000n),
@@ -71,13 +72,13 @@ test(
               ]),
             );
           } catch (error) {
-            assert.ok(error instanceof TransactionObservationError);
+            assert.ok(isThruputError(error, "transactionOutcomeUnknown"));
             failure = error;
           } finally {
             await attached.close();
           }
           await node.client.waitForTransactionReceipt(
-            failure.submission.transactionHash,
+            failure.transaction.hash,
             { timeoutMs: 30_000 },
           );
           assert.equal(
@@ -90,7 +91,7 @@ test(
             { timeout: 30_000 },
           );
           assert.deepEqual(JSON.parse(stdout), [
-            { hash: toBase58(failure.transactionHash), committed: true },
+            { hash: toBase58(failure.transaction.hash), committed: true },
           ]);
           assert.equal(sends, 1);
         },

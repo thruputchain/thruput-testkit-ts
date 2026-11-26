@@ -4,31 +4,37 @@ import {
   assertTransactionAdmission,
   assertTransactionSuccess,
   bytesEqual,
-  ContractViewError,
   createDefaultWalletBatchInvocation,
   createSubmissionEvidence,
   decodeDeployment,
   decodeExecution,
   defaultWalletAdapter,
   gasAmount,
-  NativeRpcError,
+  isThruputError,
+  sendTransaction,
   serializeSignedTransaction,
-  TransactionObservationError,
-  TransactionReceiptObservationError,
+  submitAndObserve,
+  ThruputError,
+  toBase58,
   walletGasLimit,
+  type AirdropActions,
+  type AirdropSucceeded,
   type CallResults,
   type Cluster,
   type ConnectedThruputClient,
   type ContractAddress,
   type ContractCall,
+  type PrepareTransactionRequest,
   type ContractDeployment,
   type ContractView,
   type ContractViewRequest,
   type ExecutionResult,
   type GasAmount,
   type PubkeyAccount,
+  type SignedTransaction,
   type SubmissionEvidence,
   type Transaction,
+  type TransactionReason,
   type TransactionReceipt,
   type WaitForTransactionReceiptOptions,
 } from "@thruputchain/client";
@@ -51,16 +57,31 @@ export interface SubmitOptions {
   readonly gasLimit?: GasAmount;
   /** Optional transaction expiry window, in blocks. */
   readonly expiryBlocks?: bigint;
-  /** Bounds submission after signing; defaults to 30 seconds. */
+  /**
+   * Contract code attached to the transaction, so a factory call can deploy it.
+   * The node keeps attached code only when the transaction deploys an instance.
+   */
+  readonly contractsToDeploy?: PrepareTransactionRequest["contractsToDeploy"];
+  /**
+   * Bounds the send request after signing; defaults to 30 seconds. `submit`
+   * then stops with outcome `unknown`. `call` and `deploy` keep observing
+   * the hash until `wait.timeoutMs`.
+   */
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
 }
-/** Submission controls plus separate receipt observation controls. */
+/**
+ * Send controls, plus wait controls that bound sending and observation
+ * together. A new transaction has no known commitment.
+ */
 export interface CallOptions extends SubmitOptions {
-  readonly wait?: ObserveOptions;
+  readonly wait?: Omit<ObserveOptions, "knownCommitment">;
 }
 /** Atomic deployment controls. The default root budget is SCENARIO_GAS.deployment. */
-export interface DeployOptions extends Omit<CallOptions, "expiryBlocks"> {
+export interface DeployOptions extends Omit<
+  CallOptions,
+  "expiryBlocks" | "contractsToDeploy"
+> {
   /** Exact raw native-token storage allocation. Zero explicitly skips funding. */
   readonly amount: bigint;
   /** Ordinary generated call to the prepared address, executed atomically. */
@@ -73,6 +94,28 @@ export interface SubmittedCalls<TCalls extends readonly ContractCall[]> {
   wait(
     options?: ObserveOptions,
   ): Promise<ExecutionResult & { values: CallResults<TCalls> }>;
+}
+/** Faucet request controls. The faucet chooses the amount. */
+export interface FundOptions {
+  /** Covers the request and its receipt; defaults to 60 seconds. */
+  readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
+  /**
+   * Identifies the faucet request, 1 to 32 bytes. The run report saves the
+   * nonce before the request. A repeated request with the same nonce reconciles
+   * the attempt; a new nonce can fund twice. Generated when omitted.
+   */
+  readonly clientNonce?: Uint8Array;
+}
+/** Faucet funding, available on networks with the airdrop capability. */
+export interface ActorFundOperations {
+  /**
+   * Request faucet funds for this actor once, and wait for successful execution.
+   * The run report records the request's nonce first, then its hash. An
+   * uncertain request is never repeated: a `fundingStopped` error keeps the
+   * known hash in `transaction`.
+   */
+  fund(options?: FundOptions): Promise<AirdropSucceeded>;
 }
 /** Typed helpers over SDK transactions and generated contract descriptors. */
 export interface ActorOperations {
@@ -108,8 +151,8 @@ export interface ScenarioOperations {
   readonly confirmedHeight: bigint;
   /**
    * Observe original signed evidence without sending it again.
-   * On submission or observation failure, SDK TransactionObservationError retains
-   * this evidence in `error.submission`. Execution errors retain their receipts.
+   * A failure is a `ThruputError` whose `transaction` keeps this evidence in
+   * `submission`. Execution errors keep their receipts.
    * Cancellation cannot undo a transaction that was already sent.
    */
   observe(
@@ -145,6 +188,9 @@ export function createOperations(
 ) {
   let nextNonce = randomBytes(8).readBigUInt64BE();
   let confirmedHeight = 0n;
+  function confirm(height: bigint) {
+    if (height > confirmedHeight) confirmedHeight = height;
+  }
   function reserve(): bigint {
     signal.throwIfAborted();
     if (nextNonce > 0xffffffffffffffffn)
@@ -153,6 +199,25 @@ export function createOperations(
   }
   function scoped(other?: AbortSignal): AbortSignal {
     return other ? AbortSignal.any([signal, other]) : signal;
+  }
+  // Later reads must include a transaction that is known to have committed.
+  function confirmKnown(error: unknown) {
+    const known =
+      isThruputError(error, "transactionOutcomeUnknown") ||
+      isThruputError(error, "fundingStopped")
+        ? error.context.knownCommitment
+        : undefined;
+    if (known) confirm(known.blockHeight);
+  }
+  /** Record the receipt, then require successful execution. */
+  async function settle(
+    receipt: TransactionReceipt,
+    submission: SubmissionEvidence,
+  ): Promise<ExecutionResult> {
+    confirm(receipt.blockHeight);
+    await onReceipt?.(receipt, submission);
+    assertTransactionSuccess(receipt, submission);
+    return { transactionHash: submission.transactionHash, receipt, submission };
   }
   async function observe(
     evidence: SubmissionEvidence,
@@ -180,28 +245,10 @@ export function createOperations(
         },
       );
     } catch (error) {
-      if (
-        error instanceof TransactionReceiptObservationError &&
-        error.knownCommitment &&
-        error.knownCommitment.blockHeight > confirmedHeight
-      ) {
-        confirmedHeight = error.knownCommitment.blockHeight;
-      }
-      throw new TransactionObservationError(
-        submission,
-        error,
-        undefined,
-        error instanceof TransactionReceiptObservationError
-          ? error.knownCommitment
-          : options.knownCommitment,
-        "observation",
-      );
+      confirmKnown(error);
+      throw withSubmission(error, submission);
     }
-    if (receipt.blockHeight > confirmedHeight)
-      confirmedHeight = receipt.blockHeight;
-    await onReceipt?.(receipt, submission);
-    assertTransactionSuccess(receipt, submission);
-    return { transactionHash: submission.transactionHash, receipt, submission };
+    return settle(receipt, submission);
   }
 
   const reads: ScenarioOperations = {
@@ -254,7 +301,18 @@ export function createOperations(
               { signal: control },
             );
             const outcome = response.results[0];
-            if (outcome.kind !== "return") throw new ContractViewError(outcome);
+            if (outcome.kind !== "return")
+              throw new ThruputError(
+                "contractViewFailed",
+                `Contract view ${request.method.name} did not return`,
+                {
+                  context: {
+                    method: request.method.name,
+                    entrypoint: retained.request.entrypoint,
+                    outcome,
+                  },
+                },
+              );
             return {
               value: outcome.value,
               stateBlockHeight: outcome.stateBlockHeight,
@@ -264,9 +322,8 @@ export function createOperations(
           } catch (error) {
             control.throwIfAborted();
             if (
-              !(error instanceof NativeRpcError) ||
-              error.decoded.classification !== "known" ||
-              error.decoded.data.kind !== "stateHeightUnavailable"
+              !isThruputError(error, "nativeRpcError") ||
+              error.context.kind !== "stateHeightUnavailable"
             )
               throw error;
             lastError = error;
@@ -285,9 +342,16 @@ export function createOperations(
   function actor(
     wallet: WalletActions<PubkeyAccount>,
     onSigned?: (evidence: SubmissionEvidence) => void | Promise<void>,
-  ): ActorOperations {
-    function waiting(options: CallOptions): ObserveOptions {
+  ): ActorOperations & ActorFundOperations {
+    function waiting(
+      options: CallOptions,
+    ): ObserveOptions & { signal: AbortSignal } {
       const wait = options.wait ?? {};
+      // Fail before signing, as the client does.
+      if ((wait as ObserveOptions).knownCommitment !== undefined)
+        throw new TypeError(
+          "knownCommitment applies only when observing an existing transaction",
+        );
       if (wait.timeoutMs !== undefined)
         duration(wait.timeoutMs, "wait.timeoutMs");
       if (wait.pollingIntervalMs !== undefined)
@@ -298,16 +362,15 @@ export function createOperations(
       control.throwIfAborted();
       return { ...wait, signal: control };
     }
-    async function send(
-      prepare: () => Promise<Transaction>,
-      nonce: bigint,
-      options: SubmitOptions,
-    ): Promise<SubmissionEvidence> {
-      const control = scoped(options.signal);
-      const timeout = duration(options.timeoutMs ?? 30_000, "timeoutMs");
+    /** Prepare, sign, and save evidence. Nothing is sent yet. */
+    async function sign(
+      prepare: (nonce: bigint) => Promise<Transaction>,
+      control: AbortSignal,
+    ): Promise<{ signed: SignedTransaction; evidence: SubmissionEvidence }> {
       control.throwIfAborted();
       client.requireMethods(["getChainTip", "sendTransaction"]);
-      const prepared = await prepare();
+      const nonce = reserve();
+      const prepared = await prepare(nonce);
       control.throwIfAborted();
       const signed = await wallet.signTransaction({
         ...prepared,
@@ -317,53 +380,60 @@ export function createOperations(
         serializeSignedTransaction(signed),
         client.network.networkHash,
       );
+      // A failed hook stops before dispatch. Check cancellation after the hook,
+      // so a cancellation while evidence is saved also stops before dispatch.
       try {
         await onSigned?.(evidence);
-        control.throwIfAborted();
-      } catch (error) {
-        throw new TransactionObservationError(
-          evidence,
-          error,
-          undefined,
-          undefined,
-          "beforeSubmission",
-        );
+      } catch (cause) {
+        throw notSubmitted(evidence, "persistenceFailed", cause);
       }
-      const deadline = new AbortController();
-      const timer = setTimeout(
-        () =>
-          deadline.abort(new Error(`Submission timed out after ${timeout}ms`)),
-        timeout,
-      );
-      try {
-        const response = await client.sendTransaction(
-          { signedTransaction: evidence.signedTransaction },
-          { signal: AbortSignal.any([control, deadline.signal]) },
-        );
-        assertTransactionAdmission(response);
-        return evidence;
-      } catch (error) {
-        throw new TransactionObservationError(
-          evidence,
-          error,
-          undefined,
-          undefined,
-          "submission",
-        );
-      } finally {
-        clearTimeout(timer);
-      }
+      if (control.aborted)
+        throw notSubmitted(evidence, "cancelled", control.reason);
+      return { signed, evidence };
     }
-    async function submit<const TCalls extends readonly ContractCall[]>(
-      calls: TCalls,
-      options: SubmitOptions = {},
-    ): Promise<SubmittedCalls<TCalls>> {
-      options.signal?.throwIfAborted();
-      const nonce = reserve();
-      const retained = [...calls] as unknown as TCalls;
-      if (!retained.length)
+    /** Send once and observe through the client, which never resends. */
+    async function execute(
+      prepare: (nonce: bigint) => Promise<Transaction>,
+      options: SubmitOptions,
+      wait: ObserveOptions & { signal: AbortSignal },
+    ): Promise<ExecutionResult> {
+      const timeout = duration(options.timeoutMs ?? 30_000, "timeoutMs");
+      client.requireMethods([
+        "getNetworkInfo",
+        "getTransactionReceipt",
+        "getTransactionStatus",
+      ]);
+      const { evidence } = await sign(prepare, wait.signal);
+      let result: ExecutionResult;
+      try {
+        result = await submitAndObserve(
+          client,
+          evidence,
+          async (dispatchSignal) => {
+            const response = await client.sendTransaction(
+              { signedTransaction: evidence.signedTransaction },
+              {
+                signal: AbortSignal.any([
+                  dispatchSignal,
+                  AbortSignal.timeout(timeout),
+                ]),
+              },
+            );
+            assertTransactionAdmission(response, evidence);
+          },
+          wait,
+        );
+      } catch (error) {
+        confirmKnown(error);
+        throw error;
+      }
+      return settle(result.receipt, evidence);
+    }
+    /** One DefaultWallet batch for the calls, prepared with a reserved nonce. */
+    function batch(calls: readonly ContractCall[], options: SubmitOptions) {
+      if (!calls.length)
         throw new RangeError("Execution requires at least one call");
-      const invocations = retained.map((call) => call.invocation);
+      const invocations = calls.map((call) => call.invocation);
       const gasLimit =
         options.gasLimit ??
         walletGasLimit(invocations, SCENARIO_GAS.walletOverhead);
@@ -371,79 +441,177 @@ export function createOperations(
         wallet.account.address,
         { invocations, gasLimit },
       );
-      const submission = await send(
-        () =>
-          wallet.prepareTransaction({
-            invocation,
-            nonce,
-            expiryBlocks: options.expiryBlocks,
-          }),
-        nonce,
-        options,
-      );
+      return (nonce: bigint) =>
+        wallet.prepareTransaction({
+          invocation,
+          nonce,
+          expiryBlocks: options.expiryBlocks,
+          contractsToDeploy: options.contractsToDeploy,
+        });
+    }
+    function decoded<const TCalls extends readonly ContractCall[]>(
+      result: ExecutionResult,
+      calls: TCalls,
+    ) {
+      return {
+        ...result,
+        values: decodeExecution(
+          result.receipt,
+          calls,
+          defaultWalletAdapter,
+          result.submission,
+        ),
+      };
+    }
+    async function submit<const TCalls extends readonly ContractCall[]>(
+      calls: TCalls,
+      options: SubmitOptions = {},
+    ): Promise<SubmittedCalls<TCalls>> {
+      const retained = [...calls] as unknown as TCalls;
+      const control = scoped(options.signal);
+      const timeout = duration(options.timeoutMs ?? 30_000, "timeoutMs");
+      const prepare = batch(retained, options);
+      const { signed, evidence: submission } = await sign(prepare, control);
+      const deadline = AbortSignal.timeout(timeout);
+      try {
+        await sendTransaction(client, signed, {
+          signal: AbortSignal.any([control, deadline]),
+        });
+      } catch (error) {
+        // The client reports the deadline as a cancellation. Name it a timeout.
+        const cancelled =
+          isThruputError(error) && error.transaction?.reason === "cancelled";
+        throw cancelled && deadline.aborted && !control.aborted
+          ? withReason(error, "timeout")
+          : error;
+      }
       return Object.freeze({
         submission,
         async wait(wait?: ObserveOptions) {
-          const result = await observe(submission, wait);
-          return {
-            ...result,
-            values: decodeExecution(
-              result.receipt,
-              retained,
-              defaultWalletAdapter,
-              submission,
-            ),
-          };
+          return decoded(await observe(submission, wait), retained);
         },
       });
     }
     return {
+      async fund(options = {}) {
+        const control = scoped(options.signal);
+        control.throwIfAborted();
+        if (!("requestAirdrop" in client))
+          throw new Error(
+            "Scenario network has no faucet. Use a cluster with the airdrop capability.",
+          );
+        const faucet = client as typeof client & AirdropActions;
+        try {
+          const result = await faucet.requestAirdrop({
+            recipient: wallet.account.address,
+            expectedNetworkHash: client.network.networkHash,
+            signal: control,
+            ...(options.clientNonce
+              ? { clientNonce: options.clientNonce }
+              : {}),
+            ...(options.timeoutMs === undefined
+              ? {}
+              : { timeoutMs: duration(options.timeoutMs, "timeoutMs") }),
+          });
+          confirm(result.blockHeight);
+          return result;
+        } catch (error) {
+          confirmKnown(error);
+          throw error;
+        }
+      },
       submit,
       async call(calls, options = {}) {
+        const retained = [...calls] as unknown as typeof calls;
         const wait = waiting(options);
-        client.requireMethods([
-          "getNetworkInfo",
-          "getTransactionReceipt",
-          "getTransactionStatus",
-        ]);
-        const pending = await submit(calls, {
-          ...options,
-          signal: wait.signal,
-        });
-        return pending.wait(wait);
+        const result = await execute(batch(retained, options), options, wait);
+        return decoded(result, retained);
       },
       async deploy(deployment, options) {
         const wait = waiting(options);
-        client.requireMethods([
-          "getNetworkInfo",
-          "getTransactionReceipt",
-          "getTransactionStatus",
-        ]);
-        options.signal?.throwIfAborted();
-        const nonce = reserve();
         const address = deployment.address.slice() as ContractAddress;
-        const submission = await send(
+        const result = await execute(
           () =>
             wallet.prepareDeployment(deployment, {
               amount: options.amount,
               gasLimit: options.gasLimit ?? SCENARIO_GAS.deployment,
               initializer: options.initializer?.invocation,
             }),
-          nonce,
-          { ...options, signal: wait.signal },
+          options,
+          wait,
         );
-        const result = await observe(submission, wait);
         return {
           ...result,
           address: decodeDeployment(
             result.receipt,
             { ...deployment, address },
             defaultWalletAdapter,
-            submission,
+            result.submission,
           ),
         };
       },
     };
   }
   return { reads, actor };
+}
+
+/** The signed transaction was not dispatched. Mirrors the client's wallet/transactionErrors.ts. */
+function notSubmitted(
+  submission: SubmissionEvidence,
+  reason: TransactionReason,
+  cause: unknown,
+): ThruputError<"transactionNotSubmitted"> {
+  return new ThruputError(
+    "transactionNotSubmitted",
+    `Transaction ${toBase58(submission.transactionHash)} was not submitted`,
+    {
+      cause,
+      transaction: {
+        hash: submission.transactionHash,
+        outcome: "notSubmitted",
+        reason,
+        submission,
+      },
+    },
+  );
+}
+
+/**
+ * Mirrors the client's wallet/transactionErrors.ts, which does not export it.
+ * Add the signed bytes to an observation error. Observation never proves that
+ * a transaction did not commit, so any other error becomes `unknown`.
+ */
+function withSubmission(
+  error: unknown,
+  submission: SubmissionEvidence,
+): ThruputError<"transactionOutcomeUnknown"> {
+  if (isThruputError(error, "transactionOutcomeUnknown") && error.transaction)
+    return new ThruputError("transactionOutcomeUnknown", error.message, {
+      context: error.context,
+      ...(error.cause === undefined ? {} : { cause: error.cause }),
+      transaction: { ...error.transaction, submission },
+    });
+  return new ThruputError(
+    "transactionOutcomeUnknown",
+    `Could not observe transaction ${toBase58(submission.transactionHash)}`,
+    {
+      cause: error,
+      transaction: {
+        hash: submission.transactionHash,
+        outcome: "unknown",
+        reason: "observationFailed",
+        submission,
+      },
+    },
+  );
+}
+
+/** Replace the reason on an error's transaction facts, keeping everything else. */
+function withReason(error: unknown, reason: TransactionReason): unknown {
+  if (!isThruputError(error) || !error.transaction) return error;
+  return new ThruputError(error.code, error.message, {
+    context: error.context,
+    ...(error.cause === undefined ? {} : { cause: error.cause }),
+    transaction: { ...error.transaction, reason },
+  });
 }

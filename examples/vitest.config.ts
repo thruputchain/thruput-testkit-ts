@@ -1,0 +1,7 @@
+import { defineConfig } from "vitest/config";
+
+// Transactions wait for confirmation, so allow more than Vitest's 5 s default.
+export default defineConfig({
+  root: import.meta.dirname,
+  test: { include: ["*.test.ts"], testTimeout: 30_000 },
+});

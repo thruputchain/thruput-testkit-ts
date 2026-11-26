@@ -8,6 +8,17 @@
     "type": "git",
     "url": "git+https://github.com/thruputchain/thruput-testkit-ts.git"
   },
+  "homepage": "https://github.com/thruputchain/thruput-testkit-ts#readme",
+  "bugs": {
+    "url": "https://github.com/thruputchain/thruput-testkit-ts/issues"
+  },
+  "keywords": [
+    "thruput",
+    "blockchain",
+    "testing",
+    "integration-tests",
+    "sdk"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -36,16 +47,17 @@
     "test:integration": "npm run build && node scripts/run-integration.mjs",
     "example:transfer": "tsx examples/01-local-transfer.ts",
     "example:counter": "tsx examples/02-deploy-counter.ts",
-    "example:agents": "tsx examples/03-concurrent-agents.ts",
-    "example:deploy": "tsx examples/04-deployment-run.ts",
-    "example:reconcile": "tsx examples/05-reconcile-run.ts",
+    "example:deploy": "tsx examples/03-deployment-run.ts",
+    "example:reconcile": "tsx examples/04-reconcile-run.ts",
+    "example:vitest": "vitest run --config examples/vitest.config.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
-  "dependencies": {
-    "@thruputchain/client": "^0.26.0"
+  "peerDependencies": {
+    "@thruputchain/client": "^0.29.0"
   },
   "devDependencies": {
+    "@thruputchain/client": "0.29.0",
     "@thruputchain/contract-spec": "0.20.0",
     "@thruputchain/protocol": "0.20.0",
     "@types/node": "25.9.1",

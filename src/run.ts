@@ -1,11 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   bytesEqual,
   createSubmissionEvidence,
   fixedFromBase58,
+  isThruputError,
   toBase58,
   type Cluster,
   type ConnectedThruputClient,
@@ -13,7 +14,13 @@ import {
   type TransactionReceipt,
   type TransactionStatus,
 } from "@thruputchain/client";
-import type { ActorOperations } from "./operations.js";
+import type { ActorFundOperations, ActorOperations } from "./operations.js";
+import {
+  persistenceFailed,
+  receiptFacts,
+  receiptOutcome,
+  type RunOutcome,
+} from "./outcomes.js";
 
 /** JSON report value. Bigints use decimal strings; receipt bytes use 0x-prefixed hex. */
 export type ReportValue =
@@ -38,28 +45,103 @@ export function reportValue(value: unknown): ReportValue {
     );
   throw new TypeError("Value cannot be encoded in a run report");
 }
-/** One recorded operation. Commitment does not by itself imply successful execution. */
+/**
+ * One recorded transaction attempt. Commitment does not by itself imply success:
+ * read `outcome`.
+ *
+ * | `operation` | Recorded by | `intent` |
+ * | --- | --- | --- |
+ * | `deploy` | `actor.deploy` | `{ address, contractHash, deploymentNonce, amount }` |
+ * | `call` | `actor.call` | `[{ method, address }]`, one entry for each call |
+ * | `submit` | `actor.submit` | `[{ method, address }]`, one entry for each call |
+ * | `fund` | `actor.fund` | `{ recipient }` |
+ * | `wallet` | A direct `actor.wallet` transaction | `null` |
+ *
+ * Addresses and hashes use base58. Amounts are raw decimal strings.
+ */
 export interface RunAttempt {
+  /** Unique within the run. Names the signed evidence file `evidence/<id>.json`. */
   id: string;
+  /** The scenario actor's name. {@link RunReport.actors} maps it to an address. */
   actor: string;
+  /** The operation that recorded this attempt. See the table above. */
   operation: string;
+  /** The enclosing `scenario.run.step`, if any. */
   step?: string;
+  /** Public description of what was requested, saved before signing. */
   intent: ReportValue;
-  /** Signed is unresolved: it does not prove dispatch, admission, or execution. */
+  /**
+   * How far the attempt got:
+   *
+   * - `intent`: recorded, not yet signed. Evidence saved just before an interruption
+   *   can still exist, so run {@link reconcileRun} before you decide anything.
+   * - `signed`: signed evidence was saved before dispatch. This does not prove
+   *   dispatch, admission, or execution.
+   * - `committed`: a block includes the transaction. Read `outcome` for execution.
+   *
+   * `fund` attempts go from `intent` to `committed`. The run does not sign faucet
+   * requests, so they have no `signed` state and no evidence file. Their intent
+   * saves the faucet `clientNonce` before the request. When a `fund` attempt
+   * has no hash, call the faucet's `requestAirdropAttempt` with that nonce to
+   * reconcile it. A new nonce can fund twice. {@link reconcileRun} only reads,
+   * so it does not call the faucet.
+   */
   state: "intent" | "signed" | "committed";
+  /** Base58 hash. Present once known, including when the outcome is unknown. */
   transactionHash?: string;
+  /** The committed receipt, for signed attempts. `fund` attempts have no receipt. */
   receipt?: ReportValue;
   /** The operation threw. Its transaction can still have committed. */
   stopped?: boolean;
+  /** Execution outcome. An `unknown` outcome never permits a resend. */
+  outcome?: RunOutcome;
 }
-/** Public run snapshot, with base58 identities and no signer secrets or signed bytes. */
+
+/** Optional caller-supplied public context. Never include signing material. */
+export interface RunStepOptions {
+  metadata?: { [key: string]: ReportValue };
+}
+/** One named `scenario.run.step`, in the order the steps started. */
+export interface RunStep {
+  /** Unique within the run. */
+  name: string;
+  /**
+   * `running` while the callback runs, then `completed` or `failed`. A failed step
+   * can contain a successful transaction: read each attempt's `outcome`.
+   */
+  state: "running" | "completed" | "failed";
+  /** Public JSON metadata, saved before the callback runs. */
+  metadata?: { [key: string]: ReportValue };
+}
+
+/**
+ * The public run record, saved as `report.json` in the run directory.
+ *
+ * It holds public identities and outcomes only: no seeds, signers, or signed
+ * transaction bytes. Signed bytes are in the restricted `evidence/` directory.
+ * Each change rewrites the file atomically, so it is always valid JSON.
+ *
+ * Compatibility: within `schemaVersion` 1, fields are only added. No field is
+ * renamed, removed, or given a new meaning. Readers must ignore unknown fields.
+ *
+ * @example
+ * List each attempt with `jq`:
+ * ```sh
+ * jq -r '.attempts[] | "\(.step) \(.operation) \(.outcome): \(.transactionHash)"' report.json
+ * ```
+ */
 export interface RunReport {
+  /** Report format version. Always 1 for this format. */
   schemaVersion: 1;
+  /** Unique run ID. Each evidence file records it. */
   id: string;
+  /** ISO 8601 time when the run started. */
   createdAt: string;
+  /** Base58 hash of the run's network. Reconciliation checks it. */
   networkHash: string;
+  /** Actor names mapped to base58 account addresses. */
   actors: Record<string, string>;
-  steps: { name: string; state: "running" | "completed" | "failed" }[];
+  steps: RunStep[];
   attempts: RunAttempt[];
 }
 /**
@@ -67,8 +149,9 @@ export interface RunReport {
  *
  * A durable run writes intent and restricted signed evidence before dispatch.
  * Its directory uses mode 0700 and evidence files use 0600. Share the public
- * report rather than the whole directory. Faucet requests do not pass through
- * the wallet evidence hook and need their own SDK funding evidence.
+ * report rather than the whole directory. `actor.fund` records faucet requests
+ * with their transaction hash. The run does not sign them, so they have no
+ * signed evidence, and reconciliation observes them by hash.
  */
 export interface ScenarioRun {
   readonly id: string;
@@ -78,27 +161,51 @@ export interface ScenarioRun {
   /**
    * Names are unique within a run. Results pass through without being persisted.
    * Await all work in the callback. A failed step does not prove transaction failure.
+   * Optional metadata is copied and saved before the callback. Use plain JSON
+   * values; metadata is public and must not contain secrets. A step can contain
+   * zero, one, or several transaction attempts, each with its own outcome.
    *
    * @example
    * ```ts
-   * const result = await scenario.run.step("deploy-counter", () =>
-   *   alice.deploy(deployment, { amount: 50_000_000n }),
+   * const result = await scenario.run.step("deploy-counter",
+   *   () => alice.deploy(deployment, { amount: 50_000_000n }),
+   *   { metadata: { label: "Deploy counter", environment: "local" } },
    * );
    * console.log(result.address);
    * ```
    */
-  step<T>(name: string, action: () => Promise<T>): Promise<T>;
+  step<T>(
+    name: string,
+    action: () => Promise<T>,
+    options?: RunStepOptions,
+  ): Promise<T>;
 }
-/** A persistence failure can follow commitment. Inspect the retained evidence. */
-export class RunPersistenceError extends Error {
-  constructor(
-    cause: unknown,
-    readonly submission?: SubmissionEvidence,
-    readonly receipt?: TransactionReceipt,
-  ) {
-    super("Could not persist run evidence", { cause });
-    this.name = "RunPersistenceError";
+function copyMetadata(metadata: NonNullable<RunStepOptions["metadata"]>) {
+  const ancestors = new Set<object>();
+  function validate(value: unknown): void {
+    if (
+      value === null ||
+      typeof value === "string" ||
+      typeof value === "boolean"
+    )
+      return;
+    if (typeof value === "number" && Number.isFinite(value)) return;
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      ancestors.has(value) ||
+      (!Array.isArray(value) &&
+        Object.getPrototypeOf(value) !== Object.prototype &&
+        Object.getPrototypeOf(value) !== null)
+    ) {
+      throw new TypeError("Step metadata must contain only JSON values");
+    }
+    ancestors.add(value);
+    for (const entry of Object.values(value)) validate(entry);
+    ancestors.delete(value);
   }
+  validate(metadata);
+  return structuredClone(metadata);
 }
 
 async function atomicJson(
@@ -179,6 +286,7 @@ export async function createRun(
       operation,
       intent,
       state: "intent",
+      outcome: "unknown",
       ...(context.getStore()?.step ? { step: context.getStore()!.step } : {}),
     };
     report.attempts.push(attempt);
@@ -197,6 +305,12 @@ export async function createRun(
         return await action();
       } catch (error) {
         attempt.stopped = true;
+        // Errors raised after signing carry transaction facts. An abort reason
+        // can be another transaction's error, so use only this attempt's facts.
+        const facts = isThruputError(error) ? error.transaction : undefined;
+        if (facts && attempt.transactionHash === toBase58(facts.hash)) {
+          if (attempt.outcome === "unknown") attempt.outcome = facts.outcome;
+        }
         try {
           await persist();
         } catch (failure) {
@@ -237,7 +351,29 @@ export async function createRun(
       hashes.set(attempt.transactionHash, attempt);
       await persist();
     } catch (error) {
-      throw new RunPersistenceError(error, submission);
+      // Raised in the signing hook, so the client reports it as not submitted.
+      throw persistenceFailed(error);
+    }
+  }
+  /** The faucet named this attempt's transaction. `capture` saves the report. */
+  function identify(transactionHash: Uint8Array): void {
+    const attempt = context.getStore()?.attempt;
+    if (attempt) attempt.transactionHash = toBase58(transactionHash);
+  }
+  async function funded(transactionHash: Uint8Array): Promise<void> {
+    const attempt = context.getStore()?.attempt;
+    if (!attempt) return;
+    attempt.state = "committed";
+    attempt.transactionHash = toBase58(transactionHash);
+    attempt.outcome = "succeeded";
+    try {
+      await persist();
+    } catch (error) {
+      throw persistenceFailed(error, {
+        hash: transactionHash,
+        outcome: "succeeded",
+        reason: "persistenceFailed",
+      });
     }
   }
   async function receipt(
@@ -248,24 +384,37 @@ export async function createRun(
     if (!attempt) return;
     attempt.state = "committed";
     attempt.receipt = reportValue(receipt);
+    const facts = receiptFacts(receipt, "persistenceFailed", submission);
+    attempt.outcome = facts.outcome;
     try {
       await persist();
     } catch (error) {
-      throw new RunPersistenceError(error, submission, receipt);
+      // The transaction committed; only the report write failed.
+      throw persistenceFailed(error, facts);
     }
   }
   const run: ScenarioRun = Object.freeze({
     id: report.id,
     ...(directory ? { directory } : {}),
     report: () => structuredClone(report),
-    async step<T>(name: string, action: () => Promise<T>) {
+    async step<T>(
+      name: string,
+      action: () => Promise<T>,
+      options?: RunStepOptions,
+    ) {
       if (
         !name ||
         name.trim() !== name ||
         report.steps.some((step) => step.name === name)
       )
         throw new Error(`Invalid or duplicate run step: ${name}`);
-      const step: RunReport["steps"][number] = { name, state: "running" };
+      const step: RunStep = {
+        name,
+        state: "running",
+        ...(options?.metadata === undefined
+          ? {}
+          : { metadata: copyMetadata(options.metadata) }),
+      };
       report.steps.push(step);
       await persist();
       return context.run({ step: name }, async () => {
@@ -290,8 +439,43 @@ export async function createRun(
       });
     },
   });
-  function track(actor: string, operations: ActorOperations): ActorOperations {
+  function track(
+    actor: string,
+    operations: ActorOperations & ActorFundOperations,
+  ): ActorOperations & ActorFundOperations {
     return {
+      fund(options = {}) {
+        // Saved with the intent, before the request, so the faucet attempt can
+        // be reconciled even if the run stops before the faucet answers.
+        // Copy the caller's bytes, so the saved and sent nonces cannot differ.
+        const clientNonce = options.clientNonce
+          ? new Uint8Array(options.clientNonce)
+          : randomBytes(16);
+        return capture(
+          actor,
+          "fund",
+          {
+            recipient: report.actors[actor] ?? null,
+            clientNonce: toBase58(clientNonce),
+          },
+          async () => {
+            try {
+              const result = await operations.fund({ ...options, clientNonce });
+              await funded(result.transactionHash);
+              return result;
+            } catch (error) {
+              // Only this request's stopped error identifies its transaction.
+              if (
+                isThruputError(error, "fundingStopped") &&
+                error.transaction &&
+                bytesEqual(error.context.request.clientNonce, clientNonce)
+              )
+                identify(error.transaction.hash);
+              throw error;
+            }
+          },
+        );
+      },
       submit(calls, options) {
         return capture(
           actor,
@@ -368,6 +552,8 @@ export interface RunObservation {
   readonly transactionHash?: string;
   readonly status: TransactionStatus | null;
   readonly receipt: TransactionReceipt | null;
+  /** Latest known execution outcome; the original report remains unchanged. */
+  readonly outcome: RunOutcome;
   /** An observation error never proves transaction failure. */
   readonly error?: unknown;
 }
@@ -387,7 +573,7 @@ export interface RunObservation {
  *
  * const result = await reconcileRun("./runs/deployment", client);
  * for (const observation of result.observations) {
- *   console.log(observation.transactionHash, observation.receipt, observation.error);
+ *   console.log(observation.transactionHash, observation.outcome);
  * }
  * ```
  */
@@ -417,6 +603,43 @@ export async function reconcileRun(
     if (!bytesEqual(expected, network.networkHash))
       throw new Error("Run network does not match the connected network");
     const observations: RunObservation[] = [];
+    // Read-only: status and receipt for an original hash. Nothing is submitted.
+    async function observe(
+      attempt: RunAttempt,
+      transactionHash: Uint8Array,
+    ): Promise<RunObservation> {
+      const hash = toBase58(transactionHash);
+      let status: TransactionStatus | null = null;
+      let receipt: TransactionReceipt | null = null;
+      try {
+        status = await client.getTransactionStatus(
+          { transactionHash },
+          { signal },
+        );
+        receipt = await client.getTransactionReceipt(
+          { transactionHash },
+          { signal },
+        );
+        return {
+          attemptId: attempt.id,
+          transactionHash: hash,
+          status,
+          receipt,
+          outcome: receipt
+            ? receiptOutcome(receipt)
+            : (attempt.outcome ?? "unknown"),
+        };
+      } catch (error) {
+        return {
+          attemptId: attempt.id,
+          transactionHash: hash,
+          status,
+          receipt,
+          error,
+          outcome: attempt.outcome ?? "unknown",
+        };
+      }
+    }
     for (const attempt of report.attempts) {
       signal.throwIfAborted();
       let raw: string;
@@ -427,10 +650,21 @@ export async function reconcileRun(
         );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        // Faucet transactions are not signed by the run, so only their hash exists.
+        if (attempt.operation === "fund" && attempt.transactionHash) {
+          observations.push(
+            await observe(
+              attempt,
+              fixedFromBase58(attempt.transactionHash, 32),
+            ),
+          );
+          continue;
+        }
         observations.push({
           attemptId: attempt.id,
           status: null,
           receipt: null,
+          outcome: attempt.outcome ?? "unknown",
           ...(attempt.state === "intent"
             ? {}
             : { error: new Error("Signed evidence is missing") }),
@@ -460,32 +694,7 @@ export async function reconcileRun(
           "Run evidence hash does not match the recorded attempt",
         );
       // Evidence may be durable even if interruption prevented the public update.
-      let status: TransactionStatus | null = null;
-      let receipt: TransactionReceipt | null = null;
-      try {
-        status = await client.getTransactionStatus(
-          { transactionHash: evidence.transactionHash },
-          { signal },
-        );
-        receipt = await client.getTransactionReceipt(
-          { transactionHash: evidence.transactionHash },
-          { signal },
-        );
-        observations.push({
-          attemptId: attempt.id,
-          transactionHash: hash,
-          status,
-          receipt,
-        });
-      } catch (error) {
-        observations.push({
-          attemptId: attempt.id,
-          transactionHash: hash,
-          status,
-          receipt,
-          error,
-        });
-      }
+      observations.push(await observe(attempt, evidence.transactionHash));
     }
     return { report, observations };
   } finally {

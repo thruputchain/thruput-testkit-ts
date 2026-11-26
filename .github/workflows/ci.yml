@@ -28,6 +28,10 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+      # npm 10, bundled with Node 22, crashes ("reading 'edgesOut'") while it
+      # resolves vitest's optional peers in the package test's consumer install.
+      - if: matrix.node-version == 22
+        run: npm install -g npm@11.19.0
       - run: npm ci
       - run: npm run format:check
       - run: npm run typecheck
@@ -46,11 +50,24 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+      - name: Read minimum client peer
+        id: client
+        run: echo "version=$(node -p 'require("./package.json").peerDependencies["@thruputchain/client"].replace(/^\^/, "")')" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.12.0
-      - run: npm ci --omit=dev
-      - run: npm run test:smoke
+      # Install as a consumer would, with the oldest supported Node and client peer.
+      - name: Smoke test minimum versions
+        env:
+          CLIENT_VERSION: ${{ steps.client.outputs.version }}
+        run: |
+          mkdir "$RUNNER_TEMP/consumer"
+          cp tests/consumer-smoke.mjs "$RUNNER_TEMP/consumer/"
+          cd "$RUNNER_TEMP/consumer"
+          echo '{"private":true,"type":"module"}' > package.json
+          npm install --no-audit --no-fund "$RUNNER_TEMP"/thruputchain-testkit-*.tgz "@thruputchain/client@$CLIENT_VERSION"
+          node consumer-smoke.mjs
 
   # Enable explicitly after this repository has access to the runtime runner.
   # Ordinary pull requests use hosted runners and never need node binaries.

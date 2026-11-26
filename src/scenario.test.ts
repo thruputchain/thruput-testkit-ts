@@ -8,7 +8,6 @@ import {
   MockTransport,
   networkHash,
   sha256Hash,
-  TransactionObservationError,
   type Transport,
 } from "@thruputchain/client";
 import { ERC20 } from "@thruputchain/client/contracts";
@@ -194,12 +193,10 @@ describe("attached scenarios", () => {
           ),
           gasLimit: gasAmount(1_000_000n),
         });
-        await expect(operation).rejects.toBeInstanceOf(
-          TransactionObservationError,
-        );
+        // The client's wallet reports a failed signing hook as not submitted.
         await expect(operation).rejects.toMatchObject({
-          phase: "beforeSubmission",
-          cause: failure,
+          code: "transactionNotSubmitted",
+          transaction: { outcome: "notSubmitted", reason: "persistenceFailed" },
         });
         expect(onSigned).toHaveBeenCalledWith(
           "alice",

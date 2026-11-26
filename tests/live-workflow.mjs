@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { setTimeout as sleep } from "node:timers/promises";
 import {
   createPubkeyAccount,
   Ed25519Signer,
@@ -38,29 +37,22 @@ export async function transfer() {
     async (scenario) => {
       const alice = scenario.actor("alice");
       const bob = scenario.actor("bob");
-      await alice.wallet.requestAirdrop({ timeoutMs: 30_000 });
-      const funded = await bob.wallet.requestAirdrop({ timeoutMs: 30_000 });
-
-      // GH-611 will add consistent-read helpers. Until then, use the generated
-      // view and explicitly wait for the snapshot required by this workflow.
-      async function balanceAt(minHeight) {
-        const deadline = Date.now() + 10_000;
-        while (true) {
-          const result = await ERC20.v0_1.getBalanceOf.view({
-            client: scenario.client,
-            address: NATIVE_TOKEN_ADDRESS,
-            args: { addr: bob.account.address },
-            signal: scenario.signal,
-          });
-          if (result.stateBlockHeight >= minHeight) return result.value;
-          assert.ok(
-            Date.now() < deadline,
-            "Balance snapshot did not reach the confirmed height",
-          );
-          await sleep(50, undefined, { signal: scenario.signal });
-        }
-      }
-      const before = await balanceAt(funded.blockHeight);
+      await alice.fund({ timeoutMs: 30_000 });
+      await bob.fund({ timeoutMs: 30_000 });
+      // Reads wait for state that includes the scenario's confirmed funding.
+      // A direct wallet write is outside the scenario, so pass its height.
+      const balance = async (minStateBlockHeight = 0n) =>
+        (
+          await scenario.view(
+            ERC20.v0_1.getBalanceOf.viewRequest({
+              address: NATIVE_TOKEN_ADDRESS,
+              args: { addr: bob.account.address },
+            }),
+            { minStateBlockHeight },
+          )
+        ).value;
+      const before = await balance();
+      // The actor's SDK wallet still saves evidence through the scenario hook.
       const result = await alice.wallet.executeCallsAndWait(
         {
           calls: [
@@ -75,10 +67,7 @@ export async function transfer() {
         { timeoutMs: 30_000, signal: scenario.signal },
       );
       assert.equal(result.values.length, 1);
-      assert.equal(
-        await balanceAt(result.receipt.blockHeight),
-        before + 1_000n,
-      );
+      assert.equal(await balance(result.receipt.blockHeight), before + 1_000n);
       assert.equal(signed.length, 1);
       assert.equal(signed[0].actor, "alice");
       assert.deepEqual(
