@@ -18,7 +18,7 @@ vi.mock("./scenario.js", () => ({
     actor: (name: string) => ({ account: options.accounts[name] }),
     client: {
       getVersionInfo: async () => ({
-        implementation: "0.47.0",
+        implementation: "0.48.0",
         wireFormat: "14.7.0",
       }),
     },
@@ -34,7 +34,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function config(mode = "ready", version = "0.47.0", devnode = "0.1.36") {
+async function config(mode = "ready", version = "0.48.0", devnode = "0.1.37") {
   const cli = join(root, `cli-${mode}`);
   await writeFile(
     cli,
@@ -206,26 +206,26 @@ it.skipIf(process.platform !== "linux")(
 );
 
 it("accepts the qualified CLI or newer, and rejects older versions", () => {
-  expect(checkCliVersion("thruput 0.47.0 (commit 61ddf183)\n")).toEqual({
-    version: "0.47.0",
+  expect(checkCliVersion("thruput 0.48.0 (commit 61ddf183)\n")).toEqual({
+    version: "0.48.0",
     qualified: true,
   });
   // Patch releases are qualified; newer minor and major versions are not.
-  expect(checkCliVersion("thruput 0.47.3").qualified).toBe(true);
-  expect(checkCliVersion("thruput 0.48.0").qualified).toBe(false);
+  expect(checkCliVersion("thruput 0.48.3").qualified).toBe(true);
+  expect(checkCliVersion("thruput 0.49.0").qualified).toBe(false);
   expect(checkCliVersion("thruput 1.0.0").qualified).toBe(false);
-  expect(() => checkCliVersion("thruput 0.46.9")).toThrow(
-    "older than the qualified 0.47.0",
+  expect(() => checkCliVersion("thruput 0.47.9")).toThrow(
+    "older than the qualified 0.48.0",
   );
-  expect(() => checkCliVersion("hogd 0.47.0")).toThrow("Unrecognized");
+  expect(() => checkCliVersion("hogd 0.48.0")).toThrow("Unrecognized");
 });
 
 it("reads the CLI's devnode and checks the wire-format major version", () => {
   expect(
     parseDefaultDevnode(
-      JSON.stringify({ ok: true, data: { defaultVersion: "0.1.36" } }),
+      JSON.stringify({ ok: true, data: { defaultVersion: "0.1.37" } }),
     ),
-  ).toBe("0.1.36");
+  ).toBe("0.1.37");
   expect(() => parseDefaultDevnode(JSON.stringify({ ok: false }))).toThrow(
     "default devnode",
   );
@@ -243,7 +243,7 @@ it.skipIf(process.platform !== "linux")(
       signal: options.network.signal!,
       client: {
         getVersionInfo: async () => ({
-          implementation: "0.48.0",
+          implementation: "0.49.0",
           wireFormat: "14.8.0",
         }),
       } as unknown as Awaited<ReturnType<typeof createScenario>>["client"],
@@ -251,12 +251,12 @@ it.skipIf(process.platform !== "linux")(
     }));
     try {
       const scenario = await createLocalScenario(
-        await config("ready", "0.48.0", "0.1.37"),
+        await config("ready", "0.49.0", "0.1.38"),
       );
       await scenario.close();
       expect(scenario.local.runtime).toEqual({
-        cli: "0.48.0",
-        devnode: "0.1.37",
+        cli: "0.49.0",
+        devnode: "0.1.38",
         wireFormat: "14.8.0",
       });
       // The node runs the CLI's own devnode, not the qualified one.
@@ -266,10 +266,10 @@ it.skipIf(process.platform !== "linux")(
           "utf8",
         ),
       );
-      expect(args[args.indexOf("--hog-devnode-version") + 1]).toBe("0.1.37");
+      expect(args[args.indexOf("--hog-devnode-version") + 1]).toBe("0.1.38");
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining(
-          "CLI 0.48.0 with devnode 0.1.37 is not the qualified",
+          "CLI 0.49.0 with devnode 0.1.38 is not the qualified",
         ),
         { code: "THRUPUT_TESTKIT_UNQUALIFIED_CLI" },
       );

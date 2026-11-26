@@ -28,8 +28,8 @@ import {
  * An older CLI, or a node with another wire-format major version, is rejected.
  */
 export const LOCAL_RUNTIME = Object.freeze({
-  cli: "0.47.0",
-  devnode: "0.1.36",
+  cli: "0.48.0",
+  devnode: "0.1.37",
   wireFormat: "14.7.0",
 });
 type LocalCluster = ReturnType<typeof localnet>;
