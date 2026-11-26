@@ -168,7 +168,7 @@ A durable run directory contains:
 - `steps`: each named step, with `running`, `completed`, or `failed`, and its metadata.
 - `attempts`: each transaction, with its actor, step, `operation` (`deploy`, `call`, `submit`, `fund`, or `wallet`), hash, receipt, and `outcome`.
 
-An `outcome` is `succeeded`, `failed`, `notSubmitted`, or `unknown`. A failed step can contain a successful transaction. An unknown outcome never permits another submission. Faucet requests from `actor.fund` have a hash and an outcome, but no receipt or evidence file, because the run does not sign them.
+An `outcome` is `succeeded`, `failed`, `notSubmitted`, or `unknown`. A failed step can contain a successful transaction. An unknown outcome never permits another submission. Faucet requests from `actor.fund` have a hash and an outcome, but no receipt or evidence file, because the run does not sign them. Their intent saves the faucet `clientNonce` before the request. If a run stops before the faucet answers, the attempt has no hash: call `requestAirdropAttempt` with the saved nonce to reconcile it, because a new nonce can fund twice.
 
 `reconcileRun` observes every attempt again, by its signed evidence or, for faucet requests, by hash. It returns the latest outcomes and does not change the report. Within `schemaVersion` 1, fields are only added, never renamed or removed. The API reference for `RunReport` and `RunAttempt` documents each field.
 

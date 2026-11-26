@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
@@ -80,7 +80,11 @@ export interface RunAttempt {
    * - `committed`: a block includes the transaction. Read `outcome` for execution.
    *
    * `fund` attempts go from `intent` to `committed`. The run does not sign faucet
-   * requests, so they have no `signed` state and no evidence file.
+   * requests, so they have no `signed` state and no evidence file. Their intent
+   * saves the faucet `clientNonce` before the request. When a `fund` attempt
+   * has no hash, call the faucet's `requestAirdropAttempt` with that nonce to
+   * reconcile it. A new nonce can fund twice. {@link reconcileRun} only reads,
+   * so it does not call the faucet.
    */
   state: "intent" | "signed" | "committed";
   /** Base58 hash. Present once known, including when the outcome is unknown. */
@@ -302,19 +306,10 @@ export async function createRun(
       } catch (error) {
         attempt.stopped = true;
         // Errors raised after signing carry transaction facts. An abort reason
-        // can be another transaction's error, so use only facts for this
-        // attempt's hash. A stopped faucet request is the only error that
-        // gives the hash first.
+        // can be another transaction's error, so use only this attempt's facts.
         const facts = isThruputError(error) ? error.transaction : undefined;
-        const hash = facts && toBase58(facts.hash);
-        if (
-          facts &&
-          (attempt.transactionHash
-            ? attempt.transactionHash === hash
-            : isThruputError(error, "fundingStopped"))
-        ) {
+        if (facts && attempt.transactionHash === toBase58(facts.hash)) {
           if (attempt.outcome === "unknown") attempt.outcome = facts.outcome;
-          attempt.transactionHash = hash;
         }
         try {
           await persist();
@@ -359,6 +354,11 @@ export async function createRun(
       // Raised in the signing hook, so the client reports it as not submitted.
       throw persistenceFailed(error);
     }
+  }
+  /** The faucet named this attempt's transaction. `capture` saves the report. */
+  function identify(transactionHash: Uint8Array): void {
+    const attempt = context.getStore()?.attempt;
+    if (attempt) attempt.transactionHash = toBase58(transactionHash);
   }
   async function funded(transactionHash: Uint8Array): Promise<void> {
     const attempt = context.getStore()?.attempt;
@@ -444,15 +444,32 @@ export async function createRun(
     operations: ActorOperations & ActorFundOperations,
   ): ActorOperations & ActorFundOperations {
     return {
-      fund(options) {
+      fund(options = {}) {
+        // Saved with the intent, before the request, so the faucet attempt can
+        // be reconciled even if the run stops before the faucet answers.
+        const clientNonce = options.clientNonce ?? randomBytes(16);
         return capture(
           actor,
           "fund",
-          { recipient: report.actors[actor] ?? null },
+          {
+            recipient: report.actors[actor] ?? null,
+            clientNonce: toBase58(clientNonce),
+          },
           async () => {
-            const result = await operations.fund(options);
-            await funded(result.transactionHash);
-            return result;
+            try {
+              const result = await operations.fund({ ...options, clientNonce });
+              await funded(result.transactionHash);
+              return result;
+            } catch (error) {
+              // Only this request's stopped error identifies its transaction.
+              if (
+                isThruputError(error, "fundingStopped") &&
+                error.transaction &&
+                bytesEqual(error.context.request.clientNonce, clientNonce)
+              )
+                identify(error.transaction.hash);
+              throw error;
+            }
           },
         );
       },

@@ -286,9 +286,30 @@ it("does not record another transaction's facts from an abort reason", async () 
         .actor("alice")
         .call([call], { signal: AbortSignal.abort(other) }),
     ).rejects.toBe(other);
-    const [attempt] = scenario.run.report().attempts;
-    expect(attempt).toMatchObject({ state: "intent", outcome: "unknown" });
-    expect(attempt!.transactionHash).toBeUndefined();
+    // A stopped faucet request from elsewhere does not identify this call.
+    const funding = new ThruputError("fundingStopped", "funding stopped", {
+      context: {
+        request: {
+          recipient: new Uint8Array(32),
+          clientNonce: new Uint8Array([1]),
+          networkHash: new Uint8Array(32),
+        },
+      },
+      transaction: {
+        hash: new Uint8Array(32).fill(8),
+        outcome: "unknown",
+        reason: "timeout",
+      },
+    });
+    await expect(
+      scenario
+        .actor("alice")
+        .call([call], { signal: AbortSignal.abort(funding) }),
+    ).rejects.toBe(funding);
+    for (const attempt of scenario.run.report().attempts) {
+      expect(attempt).toMatchObject({ state: "intent", outcome: "unknown" });
+      expect(attempt.transactionHash).toBeUndefined();
+    }
   } finally {
     await scenario.close();
   }
@@ -336,8 +357,9 @@ it("records faucet funding with its hash and reconciles it without another reque
   const request = vi.spyOn(mock, "request");
   const scenario = await createScenario(config(mock));
   try {
+    const clientNonce = new Uint8Array(16).fill(3);
     const result = await scenario.run.step("fund-alice", () =>
-      scenario.actor("alice").fund(),
+      scenario.actor("alice").fund({ clientNonce }),
     );
     // Later reads must include the funding transaction.
     expect(scenario.confirmedHeight).toBe(result.blockHeight);
@@ -347,7 +369,11 @@ it("records faucet funding with its hash and reconciles it without another reque
         actor: "alice",
         operation: "fund",
         step: "fund-alice",
-        intent: { recipient: report.actors.alice },
+        // The nonce is saved before the request, so it can be reconciled.
+        intent: {
+          recipient: report.actors.alice,
+          clientNonce: toBase58(clientNonce),
+        },
         state: "committed",
         outcome: "succeeded",
         transactionHash: toBase58(result.transactionHash),

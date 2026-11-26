@@ -100,14 +100,20 @@ export interface FundOptions {
   /** Covers the request and its receipt; defaults to 60 seconds. */
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
+  /**
+   * Identifies the faucet request, 1 to 32 bytes. The run report saves the
+   * nonce before the request. A repeated request with the same nonce reconciles
+   * the attempt; a new nonce can fund twice. Generated when omitted.
+   */
+  readonly clientNonce?: Uint8Array;
 }
 /** Faucet funding, available on networks with the airdrop capability. */
 export interface ActorFundOperations {
   /**
    * Request faucet funds for this actor once, and wait for successful execution.
-   * The run report records the request and its hash. An uncertain request is
-   * never repeated: a `fundingStopped` error keeps the known hash in
-   * `transaction`.
+   * The run report records the request's nonce first, then its hash. An
+   * uncertain request is never repeated: a `fundingStopped` error keeps the
+   * known hash in `transaction`.
    */
   fund(options?: FundOptions): Promise<AirdropSucceeded>;
 }
@@ -500,6 +506,9 @@ export function createOperations(
             recipient: wallet.account.address,
             expectedNetworkHash: client.network.networkHash,
             signal: control,
+            ...(options.clientNonce
+              ? { clientNonce: options.clientNonce }
+              : {}),
             ...(options.timeoutMs === undefined
               ? {}
               : { timeoutMs: duration(options.timeoutMs, "timeoutMs") }),
