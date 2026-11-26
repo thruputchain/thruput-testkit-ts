@@ -16,6 +16,7 @@ import {
   MockTransport,
   gasAmount,
   isThruputError,
+  ThruputError,
   toBase58,
   type Transport,
   type SubmissionEvidence,
@@ -265,6 +266,29 @@ it("keeps successful transaction outcomes when the surrounding step fails", asyn
       (await reconcileRun(join(root, "run"), scenario.client)).observations[0]!
         .outcome,
     ).toBe("succeeded");
+  } finally {
+    await scenario.close();
+  }
+});
+
+it("does not record another transaction's facts from an abort reason", async () => {
+  const scenario = await createScenario(config(new MockTransport()));
+  try {
+    const other = new ThruputError("transactionFailed", "another call failed", {
+      transaction: {
+        hash: new Uint8Array(32).fill(9),
+        outcome: "failed",
+        reason: "aborted",
+      },
+    });
+    await expect(
+      scenario
+        .actor("alice")
+        .call([call], { signal: AbortSignal.abort(other) }),
+    ).rejects.toBe(other);
+    const [attempt] = scenario.run.report().attempts;
+    expect(attempt).toMatchObject({ state: "intent", outcome: "unknown" });
+    expect(attempt!.transactionHash).toBeUndefined();
   } finally {
     await scenario.close();
   }

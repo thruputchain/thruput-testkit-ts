@@ -20,7 +20,7 @@ npm run build
 npm run example:transfer
 ```
 
-To use it in another project, run `npm pack` and install the resulting tarball. `@thruputchain/client` 0.28 is a peer dependency: testkit uses your project's client, so your app and testkit share one SDK copy.
+To use it in another project, run `npm pack` and install the resulting tarball. `@thruputchain/client` 0.29 is a peer dependency: testkit uses your project's client, so your app and testkit share one SDK copy.
 
 Managed local nodes require Linux, `ps` from procps, and Thruput CLI **0.48.0** or newer on PATH:
 
@@ -177,7 +177,7 @@ An `outcome` is `succeeded`, `failed`, `notSubmitted`, or `unknown`. A failed st
 - **Funding is explicit.** Supply local allocations, or call `actor.fund` on a network with a faucet. Contract storage funding is separate from gas budgets.
 - **Network identity is explicit.** Attached scenarios require an expected network hash and validate it before signing.
 - **Node ownership is explicit.** `withLocalScenario` closes its node; `withScenario` leaves the external node running.
-- **Errors are client `ThruputError`s.** After signing, `error.transaction` gives the hash, outcome, reason, and signed evidence, as in the client. When testkit cannot save run evidence or its report, the code is `testkitPersistenceFailed`; the transaction can still have committed.
+- **Errors are client `ThruputError`s.** After signing, `error.transaction` gives the hash, outcome, reason, and signed evidence, as in the client. If testkit cannot save the signed evidence, the code is `transactionNotSubmitted` with reason `persistenceFailed`. If it cannot save the report after a send, the code is `testkitPersistenceFailed`, and the transaction can still have committed. If the report also cannot record the failure, the error is an `AggregateError` whose first entry is the original error.
 - **Writes are not retried.** A timeout can follow commitment. Retain the original signed evidence and use `scenario.observe` or `reconcileRun` to inspect it before deciding what to do next. Faucet requests from `actor.fund` are recorded by hash and reconciled by hash; the run does not sign them.
 
 The counter artifact is an Apache-2.0 test fixture, not a release-qualified application artifact. Its [source and SHA-256](tests/fixtures/provenance.json) are recorded with the test fixtures. The matching TypeScript binding is generated; do not edit it by hand.

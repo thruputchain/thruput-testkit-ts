@@ -62,13 +62,20 @@ export interface SubmitOptions {
    * The node keeps attached code only when the transaction deploys an instance.
    */
   readonly contractsToDeploy?: PrepareTransactionRequest["contractsToDeploy"];
-  /** Bounds submission after signing; defaults to 30 seconds. */
+  /**
+   * Bounds the send request after signing; defaults to 30 seconds. `submit`
+   * then stops with outcome `unknown`. `call` and `deploy` keep observing
+   * the hash until `wait.timeoutMs`.
+   */
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
 }
-/** Submission controls plus separate receipt observation controls. */
+/**
+ * Send controls, plus wait controls that bound sending and observation
+ * together. A new transaction has no known commitment.
+ */
 export interface CallOptions extends SubmitOptions {
-  readonly wait?: ObserveOptions;
+  readonly wait?: Omit<ObserveOptions, "knownCommitment">;
 }
 /** Atomic deployment controls. The default root budget is SCENARIO_GAS.deployment. */
 export interface DeployOptions extends Omit<
@@ -330,8 +337,15 @@ export function createOperations(
     wallet: WalletActions<PubkeyAccount>,
     onSigned?: (evidence: SubmissionEvidence) => void | Promise<void>,
   ): ActorOperations & ActorFundOperations {
-    function waiting(options: CallOptions): ObserveOptions {
+    function waiting(
+      options: CallOptions,
+    ): ObserveOptions & { signal: AbortSignal } {
       const wait = options.wait ?? {};
+      // Fail before signing, as the client does.
+      if ((wait as ObserveOptions).knownCommitment !== undefined)
+        throw new TypeError(
+          "knownCommitment applies only when observing an existing transaction",
+        );
       if (wait.timeoutMs !== undefined)
         duration(wait.timeoutMs, "wait.timeoutMs");
       if (wait.pollingIntervalMs !== undefined)
@@ -348,8 +362,8 @@ export function createOperations(
       control: AbortSignal,
     ): Promise<{ signed: SignedTransaction; evidence: SubmissionEvidence }> {
       control.throwIfAborted();
-      const nonce = reserve();
       client.requireMethods(["getChainTip", "sendTransaction"]);
+      const nonce = reserve();
       const prepared = await prepare(nonce);
       control.throwIfAborted();
       const signed = await wallet.signTransaction({
@@ -360,7 +374,8 @@ export function createOperations(
         serializeSignedTransaction(signed),
         client.network.networkHash,
       );
-      // As in the client's wallet: a failed hook or a cancellation stops before dispatch.
+      // A failed hook stops before dispatch. Check cancellation after the hook,
+      // so a cancellation while evidence is saved also stops before dispatch.
       try {
         await onSigned?.(evidence);
       } catch (cause) {
@@ -374,7 +389,7 @@ export function createOperations(
     async function execute(
       prepare: (nonce: bigint) => Promise<Transaction>,
       options: SubmitOptions,
-      wait: ObserveOptions,
+      wait: ObserveOptions & { signal: AbortSignal },
     ): Promise<ExecutionResult> {
       const timeout = duration(options.timeoutMs ?? 30_000, "timeoutMs");
       client.requireMethods([
@@ -382,7 +397,7 @@ export function createOperations(
         "getTransactionReceipt",
         "getTransactionStatus",
       ]);
-      const { evidence } = await sign(prepare, wait.signal ?? signal);
+      const { evidence } = await sign(prepare, wait.signal);
       let result: ExecutionResult;
       try {
         result = await submitAndObserve(
@@ -458,7 +473,9 @@ export function createOperations(
         });
       } catch (error) {
         // The client reports the deadline as a cancellation. Name it a timeout.
-        throw deadline.aborted && !control.aborted
+        const cancelled =
+          isThruputError(error) && error.transaction?.reason === "cancelled";
+        throw cancelled && deadline.aborted && !control.aborted
           ? withReason(error, "timeout")
           : error;
       }
@@ -529,7 +546,7 @@ export function createOperations(
   return { reads, actor };
 }
 
-/** The signed transaction was not dispatched. */
+/** The signed transaction was not dispatched. Mirrors the client's wallet/transactionErrors.ts. */
 function notSubmitted(
   submission: SubmissionEvidence,
   reason: TransactionReason,
@@ -551,6 +568,7 @@ function notSubmitted(
 }
 
 /**
+ * Mirrors the client's wallet/transactionErrors.ts, which does not export it.
  * Add the signed bytes to an observation error. Observation never proves that
  * a transaction did not commit, so any other error becomes `unknown`.
  */

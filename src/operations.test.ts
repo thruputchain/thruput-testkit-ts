@@ -408,6 +408,49 @@ it("times out a dispatched submission without replacing its transaction", async 
   });
 });
 
+it("keeps observing a call whose send request timed out", async () => {
+  const f = fixture();
+  await withScenario(f.options, async (scenario) => {
+    f.state.hangSubmit = true;
+    const result = await scenario
+      .actor("alice")
+      .call([f.call], { timeoutMs: 10, wait: { pollingIntervalMs: 1 } });
+    expect(result.values).toEqual([42n]);
+    expect(f.writes()).toHaveLength(1);
+    // Without a receipt, the wait deadline ends the call as unknown.
+    f.state.receipts = false;
+    await expect(
+      scenario.actor("alice").call([f.call], {
+        timeoutMs: 10,
+        wait: { timeoutMs: 50, pollingIntervalMs: 1 },
+      }),
+    ).rejects.toMatchObject({
+      code: "transactionOutcomeUnknown",
+      transaction: { outcome: "unknown", submission: expect.anything() },
+    });
+    expect(f.writes()).toHaveLength(2);
+  });
+});
+
+it("rejects a known commitment for a new transaction before signing", async () => {
+  const f = fixture();
+  const signed = vi.fn();
+  await withScenario({ ...f.options, onSigned: signed }, async (scenario) => {
+    const knownCommitment = {
+      transactionHash: new Uint8Array(32),
+      networkHash: new Uint8Array(32),
+      blockHeight: 1n,
+    };
+    await expect(
+      scenario
+        .actor("alice")
+        .call([f.call], { wait: { knownCommitment } as never }),
+    ).rejects.toThrow("knownCommitment applies only");
+    expect(signed).not.toHaveBeenCalled();
+    expect(f.writes()).toHaveLength(0);
+  });
+});
+
 it("does not retry a generated view decoder failure", async () => {
   const f = fixture();
   await withScenario(f.options, async (scenario) => {

@@ -13,8 +13,8 @@ declare module "@thruputchain/client" {
   interface ThruputErrorContext {
     /**
      * Testkit could not save run evidence or its report. When a transaction is
-     * involved, `transaction` describes it: a receipt that was already observed
-     * gives its outcome, with reason `persistenceFailed`.
+     * involved, `transaction` describes it. A receipt that was already observed
+     * gives its outcome; a successful execution has reason `persistenceFailed`.
      */
     testkitPersistenceFailed: Record<string, never>;
   }
@@ -26,7 +26,7 @@ declare module "@thruputchain/client" {
  */
 export type RunOutcome = TransactionOutcome;
 
-/** Known failed execution results, with the reason the client reports for each. */
+/** Mirrors the client's errors/transaction.ts. Known failed execution results, with the reason the client reports for each. */
 const failedResults: Readonly<Record<string, TransactionReason>> = {
   abort: "aborted",
   fault: "faulted",

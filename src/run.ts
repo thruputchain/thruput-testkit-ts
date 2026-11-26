@@ -301,11 +301,20 @@ export async function createRun(
         return await action();
       } catch (error) {
         attempt.stopped = true;
-        // Client and testkit errors raised after signing carry transaction facts.
+        // Errors raised after signing carry transaction facts. An abort reason
+        // can be another transaction's error, so use only facts for this
+        // attempt's hash. A stopped faucet request is the only error that
+        // gives the hash first.
         const facts = isThruputError(error) ? error.transaction : undefined;
-        if (facts) {
+        const hash = facts && toBase58(facts.hash);
+        if (
+          facts &&
+          (attempt.transactionHash
+            ? attempt.transactionHash === hash
+            : isThruputError(error, "fundingStopped"))
+        ) {
           if (attempt.outcome === "unknown") attempt.outcome = facts.outcome;
-          attempt.transactionHash = toBase58(facts.hash);
+          attempt.transactionHash = hash;
         }
         try {
           await persist();
