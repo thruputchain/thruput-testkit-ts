@@ -447,7 +447,10 @@ export async function createRun(
       fund(options = {}) {
         // Saved with the intent, before the request, so the faucet attempt can
         // be reconciled even if the run stops before the faucet answers.
-        const clientNonce = options.clientNonce ?? randomBytes(16);
+        // Copy the caller's bytes, so the saved and sent nonces cannot differ.
+        const clientNonce = options.clientNonce
+          ? new Uint8Array(options.clientNonce)
+          : randomBytes(16);
         return capture(
           actor,
           "fund",
