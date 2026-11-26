@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { promisify } from "node:util";
+import { promisify, stripVTControlCharacters } from "node:util";
 import {
   createPubkeyAccount,
   Ed25519Signer,
@@ -51,7 +51,8 @@ test(
       ],
       { timeout: 150_000, maxBuffer: 1024 * 1024 },
     );
-    assert.match(vitest.stdout, /Tests\s+2 passed/);
+    // CI forces color output, so remove terminal codes before matching.
+    assert.match(stripVTControlCharacters(vitest.stdout), /Tests\s+2 passed/);
   },
 );
 
