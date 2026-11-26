@@ -6,6 +6,7 @@ import {
   bytesEqual,
   createSubmissionEvidence,
   fixedFromBase58,
+  isThruputError,
   toBase58,
   type Cluster,
   type ConnectedThruputClient,
@@ -15,36 +16,11 @@ import {
 } from "@thruputchain/client";
 import type { ActorFundOperations, ActorOperations } from "./operations.js";
 import {
-  errorOutcome,
+  persistenceFailed,
+  receiptFacts,
   receiptOutcome,
-  type OutcomeSummary,
   type RunOutcome,
 } from "./outcomes.js";
-
-/** A persistence failure can follow commitment. Inspect the retained evidence. */
-export class RunPersistenceError extends Error {
-  constructor(
-    cause: unknown,
-    readonly submission?: SubmissionEvidence,
-    readonly receipt?: TransactionReceipt,
-  ) {
-    super("Could not persist run evidence", { cause });
-    this.name = "RunPersistenceError";
-  }
-}
-
-/** Client errors, plus testkit's persistence error, which can follow commitment. */
-export function summarizeError(error: unknown): OutcomeSummary {
-  if (!(error instanceof RunPersistenceError)) return errorOutcome(error);
-  if (error.receipt)
-    return {
-      outcome: receiptOutcome(error.receipt),
-      transactionHash: error.receipt.transactionHash,
-    };
-  return error.submission
-    ? { outcome: "unknown", transactionHash: error.submission.transactionHash }
-    : { outcome: "unknown" };
-}
 
 /** JSON report value. Bigints use decimal strings; receipt bytes use 0x-prefixed hex. */
 export type ReportValue =
@@ -325,10 +301,12 @@ export async function createRun(
         return await action();
       } catch (error) {
         attempt.stopped = true;
-        const summary = summarizeError(error);
-        if (attempt.outcome === "unknown") attempt.outcome = summary.outcome;
-        if (summary.transactionHash)
-          attempt.transactionHash = toBase58(summary.transactionHash);
+        // Client and testkit errors raised after signing carry transaction facts.
+        const facts = isThruputError(error) ? error.transaction : undefined;
+        if (facts) {
+          if (attempt.outcome === "unknown") attempt.outcome = facts.outcome;
+          attempt.transactionHash = toBase58(facts.hash);
+        }
         try {
           await persist();
         } catch (failure) {
@@ -369,7 +347,8 @@ export async function createRun(
       hashes.set(attempt.transactionHash, attempt);
       await persist();
     } catch (error) {
-      throw new RunPersistenceError(error, submission);
+      // Raised in the signing hook, so the client reports it as not submitted.
+      throw persistenceFailed(error);
     }
   }
   async function funded(transactionHash: Uint8Array): Promise<void> {
@@ -381,7 +360,11 @@ export async function createRun(
     try {
       await persist();
     } catch (error) {
-      throw new RunPersistenceError(error);
+      throw persistenceFailed(error, {
+        hash: transactionHash,
+        outcome: "succeeded",
+        reason: "persistenceFailed",
+      });
     }
   }
   async function receipt(
@@ -392,11 +375,13 @@ export async function createRun(
     if (!attempt) return;
     attempt.state = "committed";
     attempt.receipt = reportValue(receipt);
-    attempt.outcome = receiptOutcome(receipt);
+    const facts = receiptFacts(receipt, "persistenceFailed", submission);
+    attempt.outcome = facts.outcome;
     try {
       await persist();
     } catch (error) {
-      throw new RunPersistenceError(error, submission, receipt);
+      // The transaction committed; only the report write failed.
+      throw persistenceFailed(error, facts);
     }
   }
   const run: ScenarioRun = Object.freeze({

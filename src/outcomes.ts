@@ -1,69 +1,88 @@
 import {
-  ExecutionDecodeError,
-  ExecutionReturnUnavailableError,
-  FundingObservationError,
-  TransactionExecutionError,
-  TransactionObservationError,
-  TransactionReceiptObservationError,
-  UnsupportedRpcValue,
+  isUnsupportedRpcValue,
+  ThruputError,
+  toBase58,
+  type SubmissionEvidence,
+  type TransactionFactsInput,
+  type TransactionOutcome,
+  type TransactionReason,
   type TransactionReceipt,
 } from "@thruputchain/client";
 
-/**
- * Execution outcome of one recorded attempt, separate from whether its step threw.
- *
- * - `succeeded`: a receipt shows successful execution.
- * - `failed`: a receipt shows failed execution.
- * - `notSubmitted`: the transaction was never dispatched.
- * - `unknown`: the evidence does not establish an outcome. Never resubmit; observe the hash.
- */
-export type RunOutcome = "succeeded" | "failed" | "notSubmitted" | "unknown";
-
-/** Internal. Replace with the client's `error.transaction` when it is released. */
-export interface OutcomeSummary {
-  readonly outcome: RunOutcome;
-  readonly transactionHash?: Uint8Array;
-}
-
-/** Classify a receipt by its execution result. Commitment alone does not prove success. */
-export function receiptOutcome(receipt: TransactionReceipt): RunOutcome {
-  const { execution } = receipt;
-  if (execution instanceof UnsupportedRpcValue) return "unknown";
-  return execution.result === "return" ? "succeeded" : "failed";
-}
-
-/**
- * Classify an error from a client transaction or faucet operation.
- * Errors that carry a receipt use it. Error messages are never copied.
- */
-export function errorOutcome(error: unknown): OutcomeSummary {
-  if (
-    error instanceof TransactionExecutionError ||
-    error instanceof ExecutionDecodeError ||
-    error instanceof ExecutionReturnUnavailableError
-  )
-    return {
-      outcome: receiptOutcome(error.receipt),
-      transactionHash: error.receipt.transactionHash,
-    };
-  if (error instanceof FundingObservationError) {
-    // The cause can carry a receipt. The response and commitment carry the hash.
-    const summary = errorOutcome(error.cause);
-    const response = error.lastResponse;
-    const transactionHash =
-      error.knownCommitment?.transactionHash ??
-      (response && !(response instanceof UnsupportedRpcValue)
-        ? response.transactionHash
-        : undefined) ??
-      summary.transactionHash;
-    return transactionHash ? { ...summary, transactionHash } : summary;
+declare module "@thruputchain/client" {
+  interface ThruputErrorContext {
+    /**
+     * Testkit could not save run evidence or its report. When a transaction is
+     * involved, `transaction` describes it: a receipt that was already observed
+     * gives its outcome, with reason `persistenceFailed`.
+     */
+    testkitPersistenceFailed: Record<string, never>;
   }
-  if (error instanceof TransactionObservationError)
-    return {
-      outcome: error.phase === "beforeSubmission" ? "notSubmitted" : "unknown",
-      transactionHash: error.transactionHash,
-    };
-  if (error instanceof TransactionReceiptObservationError)
-    return { outcome: "unknown", transactionHash: error.transactionHash };
-  return { outcome: "unknown" };
+}
+
+/**
+ * Execution outcome of one recorded attempt: the client's `TransactionOutcome`.
+ * An `unknown` outcome never permits a resend.
+ */
+export type RunOutcome = TransactionOutcome;
+
+/** Known failed execution results, with the reason the client reports for each. */
+const failedResults: Readonly<Record<string, TransactionReason>> = {
+  abort: "aborted",
+  fault: "faulted",
+  nonDeterministicError: "executionFailed",
+  failedGasSponsorship: "executionFailed",
+  other: "executionFailed",
+};
+
+/**
+ * Transaction facts from a committed receipt, as the client builds them.
+ * A successful execution uses `successReason`: the error is about a later step.
+ */
+export function receiptFacts(
+  receipt: TransactionReceipt,
+  successReason: TransactionReason,
+  submission?: SubmissionEvidence,
+): TransactionFactsInput {
+  const { execution } = receipt;
+  const result = isUnsupportedRpcValue(execution)
+    ? undefined
+    : execution.result;
+  // Only known results count as failed; any other value is an unsupported outcome.
+  const failure =
+    result !== undefined && Object.hasOwn(failedResults, result)
+      ? failedResults[result]
+      : undefined;
+  const [outcome, reason]: [TransactionOutcome, TransactionReason] =
+    result === "return"
+      ? ["succeeded", successReason]
+      : failure
+        ? ["failed", failure]
+        : ["unknown", "outcomeUnsupported"];
+  return {
+    hash: receipt.transactionHash,
+    outcome,
+    reason,
+    receipt,
+    ...(submission ? { submission } : {}),
+  };
+}
+
+/** Testkit could not save evidence or its report. */
+export function persistenceFailed(
+  cause: unknown,
+  transaction?: TransactionFactsInput,
+): ThruputError<"testkitPersistenceFailed"> {
+  return new ThruputError(
+    "testkitPersistenceFailed",
+    transaction
+      ? `Could not save run evidence for transaction ${toBase58(transaction.hash)}`
+      : "Could not save run evidence",
+    { cause, ...(transaction ? { transaction } : {}) },
+  );
+}
+
+/** The outcome that a committed receipt shows. */
+export function receiptOutcome(receipt: TransactionReceipt): RunOutcome {
+  return receiptFacts(receipt, "resultUnavailable").outcome;
 }

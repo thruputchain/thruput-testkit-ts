@@ -54,10 +54,10 @@
     "format:check": "prettier --check ."
   },
   "peerDependencies": {
-    "@thruputchain/client": "^0.28.0"
+    "@thruputchain/client": "^0.29.0"
   },
   "devDependencies": {
-    "@thruputchain/client": "0.28.0",
+    "@thruputchain/client": "0.29.0",
     "@thruputchain/contract-spec": "0.20.0",
     "@thruputchain/protocol": "0.20.0",
     "@types/node": "25.9.1",

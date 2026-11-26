@@ -2,6 +2,7 @@ import {
   createPubkeyAccount,
   Ed25519Signer,
   gasAmount,
+  isThruputError,
   localnet,
   mainnet,
   type ContractCall,
@@ -27,6 +28,13 @@ import { Counter } from "./fixtures/counter.js";
 // Compiled against an installed tarball, never run. Negative cases protect the
 // generated-binding and capability types across the package boundary.
 async function checkTypes() {
+  const failure: unknown = undefined;
+  // Testkit adds its persistence code to the client error codes.
+  if (isThruputError(failure, "testkitPersistenceFailed")) {
+    const hash: Uint8Array | undefined = failure.transaction?.hash;
+  }
+  // @ts-expect-error Unknown codes stay rejected.
+  isThruputError(failure, "testkitUnknownCode");
   const directory: string = await createOutputDirectory(".local/setup");
   const saved: KeyFile = await createKeyFile(`${directory}/key.json`);
   const restored = await loadKeyFile(saved.path);

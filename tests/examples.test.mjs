@@ -104,7 +104,9 @@ test(
           );
           await assert.rejects(example("03-deployment-run", env), /EEXIST/);
 
-          // Forward the write, then lose its response. The example must not resend.
+          // Forward the write, then lose its response. The example must not
+          // resend: it observes the receipt instead. This address is already
+          // deployed, so the receipt shows a failed execution.
           let sends = 0;
           const proxy = createServer(async (request, response) => {
             try {
@@ -141,8 +143,9 @@ test(
               }),
             );
             assert.equal(sends, 1);
-            const unresolved = await inspectRun(runDirectory);
-            assert.equal(unresolved.attempts[0].state, "signed");
+            const observed = await inspectRun(runDirectory);
+            assert.equal(observed.attempts[0].state, "committed");
+            assert.equal(observed.attempts[0].outcome, "failed");
             const { stdout } = await example("04-reconcile-run", {
               ...env,
               RUN_DIRECTORY: runDirectory,
@@ -150,10 +153,7 @@ test(
             });
             assert.match(stdout, /committed/);
             assert.match(stdout, /receipt: \{/);
-            assert.equal(
-              (await inspectRun(runDirectory)).attempts[0].state,
-              "signed",
-            );
+            assert.deepEqual(await inspectRun(runDirectory), observed);
             assert.equal(sends, 1);
           } finally {
             proxy.closeAllConnections();

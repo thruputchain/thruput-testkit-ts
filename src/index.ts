@@ -30,7 +30,7 @@ export type {
   ViewOptions,
   SubmittedCalls,
 } from "./operations.js";
-export { inspectRun, reconcileRun, RunPersistenceError } from "./run.js";
+export { inspectRun, reconcileRun } from "./run.js";
 export type {
   ScenarioRun,
   RunStepOptions,

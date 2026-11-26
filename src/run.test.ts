@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -8,21 +15,14 @@ import {
   localnet,
   MockTransport,
   gasAmount,
-  FundingObservationError,
+  isThruputError,
   toBase58,
-  TransactionObservationError,
   type Transport,
   type SubmissionEvidence,
   type TransactionReceipt,
 } from "@thruputchain/client";
 import { Counter } from "../tests/fixtures/counter.js";
-import {
-  createScenario,
-  inspectRun,
-  reconcileRun,
-  RunPersistenceError,
-} from "./index.js";
-import { summarizeError } from "./run.js";
+import { createScenario, inspectRun, reconcileRun } from "./index.js";
 import type { ActorFundOperations } from "./operations.js";
 
 let root: string;
@@ -117,7 +117,10 @@ it("reconciles a committed transaction whose response was lost without another s
       scenario.run.step("attempt", () =>
         scenario.actor("alice").submit([call]),
       ),
-    ).rejects.toMatchObject({ phase: "submission" });
+    ).rejects.toMatchObject({
+      code: "transactionOutcomeUnknown",
+      transaction: { outcome: "unknown" },
+    });
     const before = await inspectRun(join(root, "run"));
     expect(before.steps[0]!.state).toBe("failed");
     expect(before.attempts[0]!.state).toBe("signed");
@@ -150,7 +153,7 @@ it("retains signed-but-undispatched evidence and rejects corruption", async () =
   });
   try {
     await expect(scenario.actor("alice").submit([call])).rejects.toMatchObject({
-      phase: "beforeSubmission",
+      transaction: { outcome: "notSubmitted", reason: "persistenceFailed" },
     });
     const result = await reconcileRun(join(root, "run"), scenario.client);
     expect(result.observations[0]!.receipt).toBeNull();
@@ -267,44 +270,41 @@ it("keeps successful transaction outcomes when the surrounding step fails", asyn
   }
 });
 
-it("classifies persistence failures by their retained evidence", () => {
-  const submission = {
-    transactionHash: new Uint8Array(32).fill(1),
-    networkHash: new Uint8Array(32),
-    signedTransaction: new Uint8Array([1]),
+it("reports a report write that fails after commit as a succeeded transaction", async () => {
+  const mock = new MockTransport();
+  const transport: Transport = {
+    async request(method, params, control) {
+      // Replace the report with a directory, so the receipt cannot be saved.
+      if (method === "getTransactionReceipt") {
+        await rm(join(root, "run", "report.json"));
+        await mkdir(join(root, "run", "report.json"));
+      }
+      return (await mock.request(method, params, control)) as never;
+    },
   };
-  const receipt: TransactionReceipt = {
-    transactionHash: submission.transactionHash,
-    blockHeight: 7n,
-    execution: { result: "return", returnData: new Uint8Array() },
-    events: [],
-    gasUsed: 10n,
-  };
-  const failure = new Error("disk full");
-  // A receipt shows execution even though the report write failed.
-  expect(
-    summarizeError(new RunPersistenceError(failure, submission, receipt)),
-  ).toEqual({ outcome: "succeeded", transactionHash: receipt.transactionHash });
-  // Signed bytes without a receipt do not establish an outcome.
-  expect(summarizeError(new RunPersistenceError(failure, submission))).toEqual({
-    outcome: "unknown",
-    transactionHash: submission.transactionHash,
-  });
-  expect(summarizeError(new RunPersistenceError(failure))).toEqual({
-    outcome: "unknown",
-  });
-  // Client errors use the client's classification.
-  expect(
-    summarizeError(
-      new TransactionObservationError(
-        submission,
-        failure,
-        undefined,
-        undefined,
-        "beforeSubmission",
-      ),
-    ).outcome,
-  ).toBe("notSubmitted");
+  const scenario = await createScenario(config(transport));
+  try {
+    const failure = await scenario
+      .actor("alice")
+      .call([call])
+      .catch((error: unknown) => error);
+    // The report stays broken, so the final report write fails too.
+    expect(failure).toBeInstanceOf(AggregateError);
+    const [operation] = (failure as AggregateError).errors;
+    expect(isThruputError(operation, "testkitPersistenceFailed")).toBe(true);
+    // The transaction committed; only the report write failed.
+    expect(operation).toMatchObject({
+      transaction: {
+        outcome: "succeeded",
+        reason: "persistenceFailed",
+        receipt: expect.anything(),
+        submission: expect.anything(),
+      },
+    });
+    expect(scenario.run.report().attempts[0]!.outcome).toBe("succeeded");
+  } finally {
+    await scenario.close();
+  }
 });
 
 it("records faucet funding with its hash and reconciles it without another request", async () => {
@@ -382,7 +382,10 @@ it("keeps the hash of an uncertain faucet request", async () => {
       scenario.run.step("fund-alice", () =>
         scenario.actor("alice").fund({ timeoutMs: 1_000 }),
       ),
-    ).rejects.toBeInstanceOf(FundingObservationError);
+    ).rejects.toMatchObject({
+      code: "fundingStopped",
+      transaction: { outcome: "unknown" },
+    });
     const attempt = (await inspectRun(join(root, "run"))).attempts[0]!;
     expect(attempt).toMatchObject({
       operation: "fund",

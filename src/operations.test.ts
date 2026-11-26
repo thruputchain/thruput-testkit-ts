@@ -6,13 +6,9 @@ import {
   MockTransport,
   gasAmount,
   deserializeSignedTransaction,
-  ExecutionDecodeError,
-  TransactionExecutionError,
-  TransactionObservationError,
-  JsonRpcError,
+  isThruputError,
+  ThruputError,
   toBase58,
-  ContractViewError,
-  ContractDecodeError,
   type RpcParams,
   type TransportRequestOptions,
   type SubmissionEvidence,
@@ -41,18 +37,23 @@ function fixture() {
       control?: TransportRequestOptions,
     ): Promise<T> => {
       if (method === "simulateInvocations" && state.stale-- > 0) {
-        throw new JsonRpcError(
-          -32012,
-          "snapshot behind",
-          {
-            kind: "stateHeightUnavailable",
-            requestedStateBlockHeight: String(
-              (params as Record<string, unknown>).minStateBlockHeight,
-            ),
-            observedStateBlockHeight: "0",
+        // A JSON-RPC error object, as a transport reports it.
+        const data = {
+          kind: "stateHeightUnavailable",
+          requestedStateBlockHeight: String(
+            (params as Record<string, unknown>).minStateBlockHeight,
+          ),
+          observedStateBlockHeight: "0",
+        };
+        throw new ThruputError("rpcError", "snapshot behind (RPC -32012)", {
+          context: {
+            code: -32012,
+            rpcMessage: "snapshot behind",
+            data,
+            method,
+            raw: { code: -32012, message: "snapshot behind", data },
           },
-          method,
-        );
+        });
       }
       const result = await mock.request<Record<string, unknown> | null>(
         method,
@@ -163,8 +164,8 @@ it("observes a stopped receipt wait again without another submission", async () 
     await expect(
       pending.wait({ timeoutMs: 20, pollingIntervalMs: 1 }),
     ).rejects.toMatchObject({
-      phase: "observation",
-      submission: pending.submission,
+      code: "transactionOutcomeUnknown",
+      transaction: { outcome: "unknown", submission: pending.submission },
     });
     expect(scenario.confirmedHeight).toBe(1n);
     f.state.receipts = true;
@@ -177,20 +178,25 @@ it("retains uncertain submission evidence and reconciles only by reads", async (
   const f = fixture();
   await withScenario(f.options, async (scenario) => {
     f.state.failSubmit = true;
-    let failure: TransactionObservationError | undefined;
-    try {
-      await scenario.actor("alice").call([f.call]);
-    } catch (error) {
-      expect(error).toBeInstanceOf(TransactionObservationError);
-      failure = error as TransactionObservationError;
-    }
-    expect(failure!.phase).toBe("submission");
-    expect(failure!.cause).toMatchObject({
+    // A call keeps observing after a lost response, and finds the commit.
+    expect((await scenario.actor("alice").call([f.call])).values).toEqual([
+      42n,
+    ]);
+    expect(f.writes()).toHaveLength(1);
+    // submit does not wait, so its outcome stays unknown.
+    const failure = await scenario
+      .actor("alice")
+      .submit([f.call])
+      .catch((error: unknown) => error);
+    expect(isThruputError(failure, "transactionOutcomeUnknown")).toBe(true);
+    const facts = (failure as ThruputError).transaction!;
+    expect(facts).toMatchObject({ outcome: "unknown" });
+    expect((failure as ThruputError).cause).toMatchObject({
       message: "connection lost after dispatch",
     });
-    const observed = await scenario.observe(failure!.submission);
-    expect(observed.transactionHash).toEqual(failure!.transactionHash);
-    expect(f.writes()).toHaveLength(1);
+    const observed = await scenario.observe(facts.submission!);
+    expect(observed.transactionHash).toEqual(facts.hash);
+    expect(f.writes()).toHaveLength(2);
   });
 });
 
@@ -198,18 +204,24 @@ it("preserves failed execution and successful-execution decode errors with recei
   const f = fixture();
   await withScenario(f.options, async (scenario) => {
     f.state.abort = true;
-    await expect(scenario.actor("alice").call([f.call])).rejects.toBeInstanceOf(
-      TransactionExecutionError,
-    );
+    await expect(scenario.actor("alice").call([f.call])).rejects.toMatchObject({
+      code: "transactionFailed",
+      transaction: { outcome: "failed", reason: "aborted" },
+    });
     expect(scenario.confirmedHeight).toBe(1n);
     f.state.abort = false;
     f.state.receiptData = "0x";
     await expect(scenario.actor("alice").call([f.call])).rejects.toMatchObject({
-      receipt: { execution: { result: "return" } },
-      submission: expect.anything(),
+      transaction: {
+        outcome: "succeeded",
+        receipt: { execution: { result: "return" } },
+        submission: expect.anything(),
+      },
     });
     const pending = await scenario.actor("alice").submit([f.call]);
-    await expect(pending.wait()).rejects.toBeInstanceOf(ExecutionDecodeError);
+    await expect(pending.wait()).rejects.toMatchObject({
+      code: "transactionResultUndecodable",
+    });
     expect(scenario.confirmedHeight).toBe(3n);
     expect(f.writes()).toHaveLength(3);
   });
@@ -229,9 +241,10 @@ it("waits for a fresh snapshot and does not retry contract failures", async () =
       ),
     ).toHaveLength(3);
     f.state.viewFault = true;
-    await expect(scenario.view(f.view)).rejects.toBeInstanceOf(
-      ContractViewError,
-    );
+    await expect(scenario.view(f.view)).rejects.toMatchObject({
+      code: "contractViewFailed",
+      context: { outcome: { kind: "fault" } },
+    });
     expect(
       f.request.mock.calls.filter(
         ([method]) => method === "simulateInvocations",
@@ -277,7 +290,10 @@ it("awaits the evidence hook before dispatch and consumes the failed reservation
     async (scenario) => {
       await expect(
         scenario.actor("alice").call([f.call]),
-      ).rejects.toMatchObject({ cause: failure, phase: "beforeSubmission" });
+      ).rejects.toMatchObject({
+        cause: failure,
+        transaction: { outcome: "notSubmitted", reason: "persistenceFailed" },
+      });
       expect(f.writes()).toHaveLength(0);
       await scenario.actor("alice").call([f.call]);
       expect(evidence[0]!.transactionHash).not.toEqual(
@@ -367,7 +383,9 @@ it("cancellation during the persistence hook prevents broadcast", async () => {
         scenario
           .actor("alice")
           .call([f.call], { wait: { signal: controller.signal } }),
-      ).rejects.toMatchObject({ phase: "beforeSubmission" });
+      ).rejects.toMatchObject({
+        transaction: { outcome: "notSubmitted", reason: "cancelled" },
+      });
       expect(f.writes()).toHaveLength(0);
     },
   );
@@ -377,18 +395,15 @@ it("times out a dispatched submission without replacing its transaction", async 
   const f = fixture();
   await withScenario(f.options, async (scenario) => {
     f.state.hangSubmit = true;
-    let failure: TransactionObservationError | undefined;
-    try {
-      await scenario.actor("alice").submit([f.call], { timeoutMs: 10 });
-    } catch (error) {
-      expect(error).toBeInstanceOf(TransactionObservationError);
-      failure = error as TransactionObservationError;
-    }
-    expect(failure!.phase).toBe("submission");
-    expect(failure!.cause).toMatchObject({
-      message: "Submission timed out after 10ms",
+    const failure = await scenario
+      .actor("alice")
+      .submit([f.call], { timeoutMs: 10 })
+      .catch((error: unknown) => error);
+    // A timeout after dispatch never proves the transaction was not received.
+    expect(failure).toMatchObject({
+      transaction: { outcome: "unknown", reason: "timeout" },
     });
-    await scenario.observe(failure!.submission);
+    await scenario.observe((failure as ThruputError).transaction!.submission!);
     expect(f.writes()).toHaveLength(1);
   });
 });
@@ -397,9 +412,9 @@ it("does not retry a generated view decoder failure", async () => {
   const f = fixture();
   await withScenario(f.options, async (scenario) => {
     f.state.viewData = "0x";
-    await expect(scenario.view(f.view)).rejects.toBeInstanceOf(
-      ContractDecodeError,
-    );
+    await expect(scenario.view(f.view)).rejects.toMatchObject({
+      code: "contractDecodeFailed",
+    });
     expect(
       f.request.mock.calls.filter(
         ([method]) => method === "simulateInvocations",
